@@ -1127,7 +1127,7 @@ export default function App() {
               })}
             </div>
 
-            {!activeAlert && !showMissed && distanceM != null && (
+            {!activeAlert && !showMissed && distanceM != null && distanceM <= 600 && (
               <button onClick={() => setShowMissed(true)} style={{ marginTop: 10, width: "100%", padding: "10px", borderRadius: 12, border: "1px solid #1E2D40", background: "transparent", color: "#374151", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                 😬 I missed my stop
               </button>
