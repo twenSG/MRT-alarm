@@ -698,13 +698,25 @@ export default function App() {
   function processPosition(lat, lng) {
     if (!route) return;
     setCurrentPos({ lat, lng });
-    // Update progress: find closest stop, but never go backwards
+    // Update progress: find closest stop, then check if we're closer to the NEXT
+    // stop than the current one — if so, we've passed the current stop.
     const allStops = route.legs.flatMap(l => l.stops);
-    const closestIdx = allStops.reduce((best, s, i) => {
-      const d = haversineM(lat, lng, s.lat, s.lng);
-      return d < best.d ? { i, d } : best;
-    }, { i: 0, d: Infinity }).i;
-    setPassedStopIdx(prev => Math.max(prev, closestIdx));
+    setPassedStopIdx(prev => {
+      // Start from where we already are
+      const searchFrom = Math.max(0, prev);
+      let newIdx = prev;
+      for (let i = searchFrom; i < allStops.length - 1; i++) {
+        const dCurrent = haversineM(lat, lng, allStops[i].lat, allStops[i].lng);
+        const dNext    = haversineM(lat, lng, allStops[i + 1].lat, allStops[i + 1].lng);
+        if (dNext < dCurrent) {
+          // Closer to next stop than current — we've passed stop i
+          newIdx = i + 1;
+        } else {
+          break; // Still approaching stop i, stop scanning
+        }
+      }
+      return newIdx;
+    });
     const nextAlert = route.alerts.find(a => !firedRef.current.has(a.id));
     if (!nextAlert) return;
     const d = haversineM(lat, lng, nextAlert.lat, nextAlert.lng);
