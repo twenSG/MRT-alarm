@@ -695,13 +695,13 @@ export default function App() {
   function processPosition(lat, lng) {
     if (!route) return;
     setCurrentPos({ lat, lng });
-    // Update progress line: mark all stops before the closest one as passed
-    const allStops = route.legs.flatMap(l => l.stops).filter((s, i, arr) => arr.findIndex(x => x.code === s.code) === i);
+    // Update progress: find closest stop, but never go backwards
+    const allStops = route.legs.flatMap(l => l.stops);
     const closestIdx = allStops.reduce((best, s, i) => {
       const d = haversineM(lat, lng, s.lat, s.lng);
       return d < best.d ? { i, d } : best;
     }, { i: 0, d: Infinity }).i;
-    setPassedStopIdx(closestIdx);
+    setPassedStopIdx(prev => Math.max(prev, closestIdx));
     const nextAlert = route.alerts.find(a => !firedRef.current.has(a.id));
     if (!nextAlert) return;
     const d = haversineM(lat, lng, nextAlert.lat, nextAlert.lng);
@@ -796,7 +796,7 @@ export default function App() {
     : (fromStatus === "ok" && toStatus === "ok" && fromStation && toStation);
   const activeAlert = route && activeAlertIdx !== null ? route.alerts[activeAlertIdx] : null;
   const nextUnfiredAlert = route ? route.alerts.find(a => !firedRef.current.has(a.id)) : null;
-  const allStopsFlat = route ? route.legs.flatMap(l => l.stops).filter((s, i, arr) => arr.findIndex(x => x.code === s.code) === i) : [];
+  const allStopsFlat = route ? route.legs.flatMap(l => l.stops) : [];
   const simStopIdx = useSimMode ? Math.min(Math.floor(simProgress * allStopsFlat.length), allStopsFlat.length - 1) : -1;
 
   return (
@@ -1000,8 +1000,9 @@ export default function App() {
                     {leg.stops.map((stop, si) => {
                       const isTransfer = route.alerts.find(a => a.stopCode === stop.code && a.type === "transfer");
                       const isAlight = route.alerts.find(a => a.stopCode === stop.code && a.type === "alight");
-                      const allStopsFlat = route.legs.flatMap(l => l.stops).filter((s, i, arr) => arr.findIndex(x => x.code === s.code) === i);
-                      const gIdx = allStopsFlat.findIndex(s => s.code === stop.code);
+                      const allStopsFlat = route.legs.flatMap(l => l.stops);
+                      const legOffset = route.legs.slice(0, li).reduce((sum, l) => sum + l.stops.length, 0);
+                      const gIdx = legOffset + si;
                       return (
                         <StopRow key={stop.code + si} stop={stop} color={meta.color} isFirst={si === 0} isLast={si === leg.stops.length - 1} isTransferAlert={!!isTransfer} isAlightAlert={!!isAlight} passed={passedStopIdx > gIdx} active={passedStopIdx === gIdx} />
                       );
@@ -1045,36 +1046,26 @@ export default function App() {
                   const nextAlert = nextUnfiredAlert;
                   if (!nextAlert) return <div style={{ color: "#374151", fontSize: 13, padding: "4px 0" }}>On your way…</div>;
 
-                  const alertStopIdx = allStopsFlat.findIndex(s => s.code === nextAlert.stopCode);
+                  const currentIdx = useSimMode ? simStopIdx : passedStopIdx;
+                  const nextStop = allStopsFlat[currentIdx + 1];
 
-                  // In demo mode — show stops remaining count
-                  if (useSimMode && simStopIdx >= 0 && alertStopIdx >= 0) {
-                    const stopsLeft = Math.max(0, alertStopIdx - simStopIdx);
+                  if (useSimMode ? simStopIdx >= 0 : currentPos) {
                     return (
                       <>
-                        <div style={{ color: "#fff", fontSize: 48, fontWeight: 800, fontFamily: "DM Mono", lineHeight: 1, letterSpacing: "-2px" }}>{stopsLeft}</div>
-                        <div style={{ color: "#374151", fontSize: 12, marginTop: 3 }}>
-                          stop{stopsLeft !== 1 ? "s" : ""} to <span style={{ color: nextAlert.type === "transfer" ? "#F59E0B" : "#fff", fontWeight: 600 }}>{nextAlert.stopName}</span>
-                          {nextAlert.type === "transfer" && <span style={{ color: "#F59E0B" }}> · transfer</span>}
-                        </div>
-                      </>
-                    );
-                  }
-
-                  // In GPS mode — find nearest stop index, show stops remaining
-                  if (currentPos && alertStopIdx >= 0) {
-                    const nearestIdx = allStopsFlat.reduce((best, s, i) => {
-                      const d = haversineM(currentPos.lat, currentPos.lng, s.lat, s.lng);
-                      return d < best.d ? { i, d } : best;
-                    }, { i: 0, d: Infinity }).i;
-                    const stopsLeft = Math.max(0, alertStopIdx - nearestIdx);
-                    return (
-                      <>
-                        <div style={{ color: "#fff", fontSize: 48, fontWeight: 800, fontFamily: "DM Mono", lineHeight: 1, letterSpacing: "-2px" }}>{stopsLeft}</div>
-                        <div style={{ color: "#374151", fontSize: 12, marginTop: 3 }}>
-                          stop{stopsLeft !== 1 ? "s" : ""} to <span style={{ color: nextAlert.type === "transfer" ? "#F59E0B" : "#fff", fontWeight: 600 }}>{nextAlert.stopName}</span>
-                          {nextAlert.type === "transfer" && <span style={{ color: "#F59E0B" }}> · transfer</span>}
-                        </div>
+                        <div style={{ color: "#374151", fontSize: 11, fontWeight: 700, letterSpacing: ".07em", textTransform: "uppercase", marginBottom: 6 }}>Next stop</div>
+                        <div style={{ color: "#fff", fontSize: 28, fontWeight: 800, lineHeight: 1.1 }}>{nextStop?.name ?? nextAlert.stopName}</div>
+                        {nextStop && nextStop.code !== nextAlert.stopCode && (
+                          <div style={{ color: "#374151", fontSize: 11, marginTop: 6 }}>
+                            then <span style={{ color: nextAlert.type === "transfer" ? "#F59E0B" : "#9CA3AF", fontWeight: 600 }}>{nextAlert.stopName}</span>
+                            {nextAlert.type === "transfer" && <span style={{ color: "#F59E0B" }}> · transfer</span>}
+                            {nextAlert.type === "alight" && <span style={{ color: "#9CA3AF" }}> · alight</span>}
+                          </div>
+                        )}
+                        {nextStop?.code === nextAlert.stopCode && (
+                          <div style={{ color: nextAlert.type === "transfer" ? "#F59E0B" : "#4ade80", fontSize: 11, marginTop: 4, fontWeight: 600 }}>
+                            {nextAlert.type === "transfer" ? "⇄ transfer here" : "↓ alight here"}
+                          </div>
+                        )}
                       </>
                     );
                   }
