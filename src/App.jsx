@@ -845,7 +845,25 @@ export default function App() {
             {/* Station picker mode */}
             {inputMode === "station" && (
               <>
-                <StationPicker label="From" value={fromStation} onChange={st => { setFromStation(st); setRouteError(null); }} />
+                <div style={{ position: "relative" }}>
+                  <StationPicker label="From" value={fromStation} onChange={st => { setFromStation(st); setRouteError(null); }} />
+                  <button
+                    onClick={() => {
+                      if (!navigator.geolocation) return;
+                      navigator.geolocation.getCurrentPosition(pos => {
+                        const { latitude: lat, longitude: lng } = pos.coords;
+                        const nearest = UNIQUE_STATIONS.reduce((best, s) => {
+                          const d = haversineM(lat, lng, s.lat, s.lng);
+                          return d < best.d ? { s, d } : best;
+                        }, { s: null, d: Infinity }).s;
+                        if (nearest) { setFromStation(nearest); setRouteError(null); }
+                      }, null, { enableHighAccuracy: true, timeout: 8000 });
+                    }}
+                    style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "#1E2D40", border: "1px solid #2D3F55", borderRadius: 8, color: "#60A5FA", fontSize: 11, fontWeight: 700, padding: "5px 10px", cursor: "pointer" }}
+                  >
+                    📍 Near me
+                  </button>
+                </div>
                 <StationPicker label="To" value={toStation} onChange={st => { setToStation(st); setRouteError(null); }} />
 
                 {/* Quick examples */}
@@ -875,7 +893,25 @@ export default function App() {
             {/* Postal code mode */}
             {inputMode === "postal" && (
               <>
-                <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from", v)} status={fromStatus} station={fromStation} />
+                <div style={{ position: "relative" }}>
+                  <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from", v)} status={fromStatus} station={fromStation} />
+                  <button
+                    onClick={() => {
+                      if (!navigator.geolocation) return;
+                      navigator.geolocation.getCurrentPosition(pos => {
+                        const { latitude: lat, longitude: lng } = pos.coords;
+                        const nearest = UNIQUE_STATIONS.reduce((best, s) => {
+                          const d = haversineM(lat, lng, s.lat, s.lng);
+                          return d < best.d ? { s, d } : best;
+                        }, { s: null, d: Infinity }).s;
+                        if (nearest) { setFromStation(nearest); setFromStatus("ok"); setRouteError(null); }
+                      }, null, { enableHighAccuracy: true, timeout: 8000 });
+                    }}
+                    style={{ position: "absolute", right: 10, top: 18, background: "#1E2D40", border: "1px solid #2D3F55", borderRadius: 8, color: "#60A5FA", fontSize: 11, fontWeight: 700, padding: "5px 10px", cursor: "pointer" }}
+                  >
+                    📍 Near me
+                  </button>
+                </div>
                 <PostalInput label="To (postal code)" value={toPostal} onChange={v => handlePostal("to", v)} status={toStatus} station={toStation} />
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ color: "#374151", fontSize: 11, fontWeight: 700, letterSpacing: ".07em", textTransform: "uppercase", marginBottom: 8 }}>Try these</div>
