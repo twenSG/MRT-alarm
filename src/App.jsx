@@ -448,7 +448,7 @@ function StopRow({ stop, color, isFirst, isLast, isTransferAlert, isAlightAlert,
   );
 }
 
-function AlertBanner({ alert, onMissed }) {
+function AlertBanner({ alert, onMissed, onTransferred }) {
   return (
     <div style={{ background: alert.type === "alight" ? "#052e16" : "#1c1400", border: `1.5px solid ${alert.color}`, borderRadius: 14, padding: "14px 14px", animation: "pulse2 .9s ease infinite" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
@@ -456,9 +456,16 @@ function AlertBanner({ alert, onMissed }) {
           <div style={{ color: alert.color, fontSize: 15, fontWeight: 800, marginBottom: 2 }}>{alert.type === "alight" ? "🔔" : "⇄"} {alert.message}</div>
           <div style={{ color: "#6B7280", fontSize: 12 }}>{alert.detail}</div>
         </div>
-        <button onClick={onMissed} style={{ background: "#1E2D40", border: "none", color: "#94A3B8", fontSize: 10, fontWeight: 700, borderRadius: 8, padding: "6px 10px", cursor: "pointer", flexShrink: 0, lineHeight: 1.3, textAlign: "center" }}>
-          I missed<br />my stop
-        </button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+          {alert.type === "transfer" && (
+            <button onClick={onTransferred} style={{ background: "#14532d", border: "1px solid #16a34a", color: "#4ade80", fontSize: 10, fontWeight: 700, borderRadius: 8, padding: "6px 10px", cursor: "pointer", lineHeight: 1.3, textAlign: "center" }}>
+              Transferred ✓
+            </button>
+          )}
+          <button onClick={onMissed} style={{ background: "#1E2D40", border: "none", color: "#94A3B8", fontSize: 10, fontWeight: 700, borderRadius: 8, padding: "6px 10px", cursor: "pointer", lineHeight: 1.3, textAlign: "center" }}>
+            I missed<br />my stop
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -983,7 +990,7 @@ export default function App() {
               </div>
             </div>
 
-            {activeAlert && !showMissed && <div style={{ marginBottom: 10 }}><AlertBanner alert={activeAlert} onMissed={() => { setShowMissed(true); setActiveAlertIdx(null); }} /></div>}
+            {activeAlert && !showMissed && <div style={{ marginBottom: 10 }}><AlertBanner alert={activeAlert} onMissed={() => { setShowMissed(true); setActiveAlertIdx(null); }} onTransferred={() => { firedRef.current.add(activeAlert.id); setActiveAlertIdx(null); }} /></div>}
             {showMissed && <div style={{ marginBottom: 10 }}><MissedPanel alerts={route.alerts} firedCount={firedRef.current.size} onDismiss={() => setShowMissed(false)} /></div>}
 
             {!activeAlert && !showMissed && (
