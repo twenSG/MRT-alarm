@@ -11,7 +11,7 @@ const STATIONS = [
   { code:"NS5",  name:"Yew Tee",        lat:1.3970, lng:103.7474, lines:["NSL"] },
   { code:"NS7",  name:"Kranji",         lat:1.4252, lng:103.7620, lines:["NSL"] },
   { code:"NS8",  name:"Marsiling",      lat:1.4326, lng:103.7742, lines:["NSL"] },
-  { code:"NS9",  name:"Woodlands",      lat:1.4368, lng:103.7863, lines:["NSL","TEL"] },
+  { code:"NS9",  name:"Woodlands",      lat:1.4371, lng:103.7865, lines:["NSL","TEL"] },
   { code:"NS10", name:"Admiralty",      lat:1.4408, lng:103.8008, lines:["NSL"] },
   { code:"NS11", name:"Sembawang",      lat:1.4490, lng:103.8202, lines:["NSL"] },
   { code:"NS12", name:"Canberra",       lat:1.4431, lng:103.8297, lines:["NSL"] },
@@ -124,7 +124,7 @@ const STATIONS = [
   { code:"DT7",  name:"Sixth Avenue",   lat:1.3309, lng:103.7956, lines:["DTL"] },
   { code:"DT8",  name:"Tan Kah Kee",    lat:1.3257, lng:103.8076, lines:["DTL"] },
   { code:"DT9",  name:"Botanic Gardens",lat:1.3223, lng:103.8154, lines:["CCL","DTL"] },
-  { code:"DT10", name:"Stevens",        lat:1.3198, lng:103.8264, lines:["DTL","TEL"] },
+  { code:"DT10", name:"Stevens",        lat:1.3201, lng:103.8260, lines:["DTL","TEL"] },
   { code:"DT11", name:"Newton",         lat:1.3131, lng:103.8384, lines:["NSL","DTL"] },
   { code:"DT12", name:"Little India",   lat:1.3066, lng:103.8494, lines:["NEL","DTL"] },
   { code:"DT13", name:"Rochor",         lat:1.3038, lng:103.8524, lines:["DTL"] },
@@ -153,15 +153,15 @@ const STATIONS = [
 
   // TEL — Thomson East Coast Line (#9D5918)
   { code:"TE1",  name:"Woodlands North",lat:1.4481, lng:103.7983, lines:["TEL"] },
-  { code:"TE2",  name:"Woodlands",      lat:1.4368, lng:103.7863, lines:["NSL","TEL"] },
-  { code:"TE3",  name:"Woodlands South",lat:1.4237, lng:103.7985, lines:["TEL"] },
+  { code:"TE2",  name:"Woodlands",      lat:1.4371, lng:103.7865, lines:["NSL","TEL"] },
+  { code:"TE3",  name:"Woodlands South",lat:1.4272, lng:103.7939, lines:["TEL"] },
   { code:"TE4",  name:"Springleaf",     lat:1.3981, lng:103.8187, lines:["TEL"] },
-  { code:"TE5",  name:"Lentor",         lat:1.3847, lng:103.8366, lines:["TEL"] },
-  { code:"TE6",  name:"Mayflower",      lat:1.3714, lng:103.8376, lines:["TEL"] },
-  { code:"TE7",  name:"Bright Hill",    lat:1.3629, lng:103.8348, lines:["TEL"] },
-  { code:"TE8",  name:"Upper Thomson",  lat:1.3539, lng:103.8330, lines:["TEL"] },
-  { code:"TE9",  name:"Caldecott",      lat:1.3374, lng:103.8394, lines:["CCL","TEL"] },
-  { code:"TE11", name:"Stevens",        lat:1.3198, lng:103.8264, lines:["DTL","TEL"] },
+  { code:"TE5",  name:"Lentor",         lat:1.3846, lng:103.8368, lines:["TEL"] },
+  { code:"TE6",  name:"Mayflower",      lat:1.3724, lng:103.8372, lines:["TEL"] },
+  { code:"TE7",  name:"Bright Hill",    lat:1.3638, lng:103.8347, lines:["TEL"] },
+  { code:"TE8",  name:"Upper Thomson",  lat:1.3542, lng:103.8329, lines:["TEL"] },
+  { code:"TE9",  name:"Caldecott",      lat:1.3374, lng:103.8396, lines:["CCL","TEL"] },
+  { code:"TE11", name:"Stevens",        lat:1.3201, lng:103.8260, lines:["DTL","TEL"] },
   { code:"TE12", name:"Napier",         lat:1.3066, lng:103.8187, lines:["TEL"] },
   { code:"TE13", name:"Orchard Blvd",   lat:1.3036, lng:103.8255, lines:["TEL"] },
   { code:"TE14", name:"Orchard",        lat:1.3040, lng:103.8318, lines:["NSL","TEL"] },
@@ -188,6 +188,67 @@ const UNIQUE_STATIONS = STATIONS.reduce((acc, s) => {
   if (!acc.find(x => x.name === s.name)) acc.push(s);
   return acc;
 }, []);
+
+// ─── COORDINATE HYDRATION ─────────────────────────────────────────────────────
+// On first load, fetch verified coordinates from OneMap for every station and
+// patch them in. Results are cached in localStorage so it only runs once.
+const COORD_CACHE_KEY = "mrt_coords_v1";
+
+async function fetchOneMapCoord(name) {
+  try {
+    const res = await fetch(
+      `https://www.onemap.gov.sg/api/common/elastic/search?searchVal=${encodeURIComponent(name + " MRT Station")}&returnGeom=Y&getAddrDetails=N&pageNum=1`
+    );
+    const data = await res.json();
+    if (data.results?.length) {
+      return { lat: parseFloat(data.results[0].LATITUDE), lng: parseFloat(data.results[0].LONGITUDE) };
+    }
+  } catch {}
+  return null;
+}
+
+async function hydrateCoordinates() {
+  try {
+    const cached = localStorage.getItem(COORD_CACHE_KEY);
+    if (cached) {
+      const coords = JSON.parse(cached);
+      STATIONS.forEach(s => {
+        if (coords[s.code]) { s.lat = coords[s.code].lat; s.lng = coords[s.code].lng; }
+      });
+      return;
+    }
+  } catch {}
+
+  // Fetch unique station names (avoid duplicate API calls for interchange stations)
+  const seen = new Set();
+  const toFetch = STATIONS.filter(s => {
+    if (seen.has(s.name)) return false;
+    seen.add(s.name);
+    return true;
+  });
+
+  const coords = {};
+  // Batch in groups of 5 to avoid hammering the API
+  for (let i = 0; i < toFetch.length; i += 5) {
+    const batch = toFetch.slice(i, i + 5);
+    const results = await Promise.all(batch.map(s => fetchOneMapCoord(s.name)));
+    batch.forEach((s, idx) => {
+      if (results[idx]) coords[s.name] = results[idx];
+    });
+  }
+
+  // Patch all stations (including duplicates at interchange)
+  STATIONS.forEach(s => {
+    if (coords[s.name]) { s.lat = coords[s.name].lat; s.lng = coords[s.name].lng; }
+  });
+
+  try { localStorage.setItem(COORD_CACHE_KEY, JSON.stringify(
+    Object.fromEntries(STATIONS.map(s => [s.code, { lat: s.lat, lng: s.lng }]))
+  )); } catch {}
+}
+
+// Fire and forget — app works immediately with hardcoded coords, updates silently
+hydrateCoordinates();
 
 // Line metadata
 const LINE_META = {
