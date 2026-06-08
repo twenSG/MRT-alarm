@@ -406,13 +406,14 @@ function nearestStation(lat, lng) {
 
 function vibrate(pattern) { if (navigator.vibrate) navigator.vibrate(pattern); }
 
-// OneMap geocode — proxied through /api/geocode to avoid CORS issues on Vercel
+// OneMap geocode — called directly from browser (CORS is open on their API)
 async function geocodePostal(postal) {
-  const res = await fetch(`/api/geocode?postal=${encodeURIComponent(postal)}`);
+  const res = await fetch(`https://www.onemap.gov.sg/api/common/elastic/search?searchVal=${postal}&returnGeom=Y&getAddrDetails=Y&pageNum=1`);
   if (!res.ok) throw new Error("Postal code not found");
   const data = await res.json();
-  if (!data.lat) throw new Error("Postal code not found");
-  return data;
+  if (!data.results || data.results.length === 0) throw new Error("Postal code not found");
+  const r = data.results[0];
+  return { lat: parseFloat(r.LATITUDE), lng: parseFloat(r.LONGITUDE), address: r.ADDRESS };
 }
 
 // ─── COMPONENTS ──────────────────────────────────────────────────────────────
