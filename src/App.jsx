@@ -644,6 +644,7 @@ export default function App() {
   const [currentPos, setCurrentPos] = useState(null); // {lat, lng} live position
   const [activeAlertIdx, setActiveAlertIdx] = useState(null);
   const [showMissed, setShowMissed] = useState(false);
+  const [passedStopIdx, setPassedStopIdx] = useState(-1);
   const [simProgress, setSimProgress] = useState(0);
   const [useSimMode, setUseSimMode] = useState(false);
 
@@ -694,6 +695,13 @@ export default function App() {
   function processPosition(lat, lng) {
     if (!route) return;
     setCurrentPos({ lat, lng });
+    // Update progress line: mark all stops before the closest one as passed
+    const allStops = route.legs.flatMap(l => l.stops).filter((s, i, arr) => arr.findIndex(x => x.code === s.code) === i);
+    const closestIdx = allStops.reduce((best, s, i) => {
+      const d = haversineM(lat, lng, s.lat, s.lng);
+      return d < best.d ? { i, d } : best;
+    }, { i: 0, d: Infinity }).i;
+    setPassedStopIdx(closestIdx);
     const nextAlert = route.alerts.find(a => !firedRef.current.has(a.id));
     if (!nextAlert) return;
     const d = haversineM(lat, lng, nextAlert.lat, nextAlert.lng);
@@ -956,8 +964,10 @@ export default function App() {
                     {leg.stops.map((stop, si) => {
                       const isTransfer = route.alerts.find(a => a.stopCode === stop.code && a.type === "transfer");
                       const isAlight = route.alerts.find(a => a.stopCode === stop.code && a.type === "alight");
+                      const allStopsFlat = route.legs.flatMap(l => l.stops).filter((s, i, arr) => arr.findIndex(x => x.code === s.code) === i);
+                      const gIdx = allStopsFlat.findIndex(s => s.code === stop.code);
                       return (
-                        <StopRow key={stop.code + si} stop={stop} color={meta.color} isFirst={si === 0} isLast={si === leg.stops.length - 1} isTransferAlert={!!isTransfer} isAlightAlert={!!isAlight} passed={false} active={false} />
+                        <StopRow key={stop.code + si} stop={stop} color={meta.color} isFirst={si === 0} isLast={si === leg.stops.length - 1} isTransferAlert={!!isTransfer} isAlightAlert={!!isAlight} passed={passedStopIdx > gIdx} active={passedStopIdx === gIdx} />
                       );
                     })}
                     {li < route.legs.length - 1 && (
