@@ -189,7 +189,41 @@ const UNIQUE_STATIONS = STATIONS.reduce((acc, s) => {
   return acc;
 }, []);
 
-// Coordinates are hardcoded from Wikipedia/LTA verified sources — no dynamic fetching needed.
+// ─── LIVE STATION COORDINATES ────────────────────────────────────────────────
+// On first load, fetch verified coordinates from LTA DataMall via /api/stations
+// and patch the STATIONS array. Cached in sessionStorage for the session.
+// New stations that open will automatically appear without code changes.
+(async () => {
+  try {
+    const cacheKey = "lta_stations_v1";
+    let coordMap = null;
+
+    try {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) coordMap = JSON.parse(cached);
+    } catch {}
+
+    if (!coordMap) {
+      const res = await fetch("/api/stations");
+      if (res.ok) {
+        coordMap = await res.json();
+        try { sessionStorage.setItem(cacheKey, JSON.stringify(coordMap)); } catch {}
+      }
+    }
+
+    if (coordMap) {
+      STATIONS.forEach(s => {
+        const live = coordMap[s.code];
+        if (live && live.lat && live.lng) {
+          s.lat = live.lat;
+          s.lng = live.lng;
+        }
+      });
+    }
+  } catch (e) {
+    // Silently fall back to hardcoded coords
+  }
+})();
 
 // Line metadata
 const LINE_META = {
@@ -700,7 +734,9 @@ export default function App() {
     setCurrentPos({ lat, lng });
     // Update progress: find closest stop, then check if we're closer to the NEXT
     // stop than the current one — if so, we've passed the current stop.
-    const allStops = route.legs.flatMap(l => l.stops);
+    // Deduplicate consecutive stops with the same name (transfer stations like Stevens)
+    const allStopsRaw = route.legs.flatMap(l => l.stops);
+    const allStops = allStopsRaw.filter((s, i) => i === 0 || s.name !== allStopsRaw[i - 1].name);
     setPassedStopIdx(prev => {
       // Start from where we already are
       const searchFrom = Math.max(0, prev);
@@ -811,7 +847,7 @@ export default function App() {
     : (fromStatus === "ok" && toStatus === "ok" && fromStation && toStation);
   const activeAlert = route && activeAlertIdx !== null ? route.alerts[activeAlertIdx] : null;
   const nextUnfiredAlert = route ? route.alerts.find(a => !firedRef.current.has(a.id)) : null;
-  const allStopsFlat = route ? route.legs.flatMap(l => l.stops) : [];
+  const allStopsFlat = route ? (() => { const r = route.legs.flatMap(l => l.stops); return r.filter((s, i) => i === 0 || s.name !== r[i-1].name); })() : [];
   const simStopIdx = useSimMode ? Math.min(Math.floor(simProgress * allStopsFlat.length), allStopsFlat.length - 1) : -1;
 
   return (
@@ -1017,9 +1053,9 @@ export default function App() {
                     {leg.stops.map((stop, si) => {
                       const isTransfer = route.alerts.find(a => a.stopCode === stop.code && a.type === "transfer");
                       const isAlight = route.alerts.find(a => a.stopCode === stop.code && a.type === "alight");
-                      const allStopsFlat = route.legs.flatMap(l => l.stops);
-                      const legOffset = route.legs.slice(0, li).reduce((sum, l) => sum + l.stops.length, 0);
-                      const gIdx = legOffset + si;
+                      const allStopsRaw2 = route.legs.flatMap(l => l.stops);
+                      const allStopsFlat = allStopsRaw2.filter((s, i) => i === 0 || s.name !== allStopsRaw2[i - 1].name);
+                      const gIdx = allStopsFlat.findIndex(x => x.code === stop.code);
                       return (
                         <StopRow key={stop.code + si} stop={stop} color={meta.color} isFirst={si === 0} isLast={si === leg.stops.length - 1} isTransferAlert={!!isTransfer} isAlightAlert={!!isAlight} passed={passedStopIdx > gIdx} active={passedStopIdx === gIdx} />
                       );
