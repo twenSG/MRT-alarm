@@ -189,66 +189,7 @@ const UNIQUE_STATIONS = STATIONS.reduce((acc, s) => {
   return acc;
 }, []);
 
-// ─── COORDINATE HYDRATION ─────────────────────────────────────────────────────
-// On first load, fetch verified coordinates from OneMap for every station and
-// patch them in. Results are cached in localStorage so it only runs once.
-const COORD_CACHE_KEY = "mrt_coords_v1";
-
-async function fetchOneMapCoord(name) {
-  try {
-    const res = await fetch(
-      `https://www.onemap.gov.sg/api/common/elastic/search?searchVal=${encodeURIComponent(name + " MRT Station")}&returnGeom=Y&getAddrDetails=N&pageNum=1`
-    );
-    const data = await res.json();
-    if (data.results?.length) {
-      return { lat: parseFloat(data.results[0].LATITUDE), lng: parseFloat(data.results[0].LONGITUDE) };
-    }
-  } catch {}
-  return null;
-}
-
-async function hydrateCoordinates() {
-  try {
-    const cached = localStorage.getItem(COORD_CACHE_KEY);
-    if (cached) {
-      const coords = JSON.parse(cached);
-      STATIONS.forEach(s => {
-        if (coords[s.code]) { s.lat = coords[s.code].lat; s.lng = coords[s.code].lng; }
-      });
-      return;
-    }
-  } catch {}
-
-  // Fetch unique station names (avoid duplicate API calls for interchange stations)
-  const seen = new Set();
-  const toFetch = STATIONS.filter(s => {
-    if (seen.has(s.name)) return false;
-    seen.add(s.name);
-    return true;
-  });
-
-  const coords = {};
-  // Batch in groups of 5 to avoid hammering the API
-  for (let i = 0; i < toFetch.length; i += 5) {
-    const batch = toFetch.slice(i, i + 5);
-    const results = await Promise.all(batch.map(s => fetchOneMapCoord(s.name)));
-    batch.forEach((s, idx) => {
-      if (results[idx]) coords[s.name] = results[idx];
-    });
-  }
-
-  // Patch all stations (including duplicates at interchange)
-  STATIONS.forEach(s => {
-    if (coords[s.name]) { s.lat = coords[s.name].lat; s.lng = coords[s.name].lng; }
-  });
-
-  try { localStorage.setItem(COORD_CACHE_KEY, JSON.stringify(
-    Object.fromEntries(STATIONS.map(s => [s.code, { lat: s.lat, lng: s.lng }]))
-  )); } catch {}
-}
-
-// Fire and forget — app works immediately with hardcoded coords, updates silently
-hydrateCoordinates();
+// Coordinates are hardcoded from Wikipedia/LTA verified sources — no dynamic fetching needed.
 
 // Line metadata
 const LINE_META = {
@@ -705,6 +646,7 @@ export default function App() {
   const [currentPos, setCurrentPos] = useState(null); // {lat, lng} live position
   const [activeAlertIdx, setActiveAlertIdx] = useState(null);
   const [showMissed, setShowMissed] = useState(false);
+  const [nearMeDebug, setNearMeDebug] = useState(null);
   const [passedStopIdx, setPassedStopIdx] = useState(-1);
   const [simProgress, setSimProgress] = useState(0);
   const [useSimMode, setUseSimMode] = useState(false);
@@ -917,6 +859,7 @@ export default function App() {
                           const d = haversineM(lat, lng, s.lat, s.lng);
                           return d < best.d ? { s, d } : best;
                         }, { s: null, d: Infinity }).s;
+                        setNearMeDebug(`GPS: ${lat.toFixed(4)},${lng.toFixed(4)} → ${nearest?.name ?? "none"} (${nearest ? Math.round(haversineM(lat, lng, nearest.lat, nearest.lng)) : "?"}m)`);
                         if (nearest) { setFromStation(nearest); setRouteError(null); }
                       }, null, { enableHighAccuracy: true, timeout: 8000 });
                     }}
@@ -925,6 +868,7 @@ export default function App() {
                     📍 Near me
                   </button>
                 </div>
+                {nearMeDebug && <div style={{ color: "#6B7280", fontSize: 10, fontFamily: "DM Mono", padding: "4px 2px", wordBreak: "break-all" }}>{nearMeDebug}</div>}
                 <StationPicker label="To" value={toStation} onChange={st => { setToStation(st); setRouteError(null); }} />
 
                 {/* Quick examples */}
