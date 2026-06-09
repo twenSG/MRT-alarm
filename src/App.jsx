@@ -861,215 +861,142 @@ function BusInputPanel({ onTrack }) {
 
 
 // ─── MIXED ROUTING ───────────────────────────────────────────────────────────
-// Supports: pure MRT, pure bus (1-3 legs), bus+MRT, MRT+bus, bus+MRT+bus
 function computeMixedRoutes(oLat, oLng, dLat, dLng) {
-  const BUS_MIN = 3;
-  const MRT_MIN = 2;
-  const TRANSFER_PENALTY = 5;
-  const ORIGIN_RADIUS = 600;
-  const DEST_RADIUS   = 400;
-  const TRANSFER_WALK = 300; // max walk between bus stops to transfer
-
-  function stopInfo(code) {
-    const v = BUS_STOPS[code];
-    return v ? { code, lat:v[0], lng:v[1], name:v[2] } : null;
-  }
-
-  function buildLegStops(routeStops, fromIdx, toIdx) {
-    return routeStops.slice(fromIdx, toIdx+1).map(c => {
-      const v = BUS_STOPS[c];
-      return v ? { code:c, lat:v[0], lng:v[1], name:v[2] } : { code:c, lat:0, lng:0, name:c };
-    });
-  }
-
-  function buildAlertsFull(legs) {
-    const alerts = [];
-    legs.forEach((leg, i) => {
-      const isLast = i === legs.length - 1;
-      const lastStop = leg.stops[leg.stops.length - 1];
-      if (!isLast) {
-        const nextLeg = legs[i+1];
-        const lineLabel = nextLeg.line === "BUS" ? `Bus ${nextLeg.serviceNo}` : (LINE_META[nextLeg.line]?.label || nextLeg.line);
-        alerts.push({ id:`transfer-${i}-${lastStop.code}`, type:"transfer", stopCode:lastStop.code, stopName:lastStop.name, radiusM:400, message:"Get ready to transfer", detail:`Board ${lineLabel} at ${lastStop.name}`, color:"#F59E0B", vibratePattern:[200,100,200], lat:lastStop.lat, lng:lastStop.lng });
-      } else {
-        alerts.push({ id:`alight-${lastStop.code}`, type:"alight", stopCode:lastStop.code, stopName:lastStop.name, radiusM:400, message:"Alight now!", detail:`${lastStop.name} (${lastStop.code})`, color:"#009645", vibratePattern:[300,100,300,100,600], lat:lastStop.lat, lng:lastStop.lng });
-      }
-    });
-    return alerts;
-  }
-
-  // Stops near origin and destination
-  const nearOrigin = Object.entries(BUS_STOPS)
-    .map(([code, v]) => ({ code, lat:v[0], lng:v[1], d:haversineM(oLat, oLng, v[0], v[1]) }))
-    .filter(s => s.d <= ORIGIN_RADIUS).sort((a,b) => a.d - b.d).slice(0, 10);
-  const nearDest = Object.entries(BUS_STOPS)
-    .map(([code, v]) => ({ code, lat:v[0], lng:v[1], d:haversineM(dLat, dLng, v[0], v[1]) }))
-    .filter(s => s.d <= DEST_RADIUS).sort((a,b) => a.d - b.d).slice(0, 10);
-  const nearOriginCodes = new Set(nearOrigin.map(s => s.code));
-  const nearDestCodes   = new Set(nearDest.map(s => s.code));
-
-  // MRT stations near origin and dest
-  const nearOriginStations = UNIQUE_STATIONS
-    .map(s => ({ ...s, d:haversineM(oLat, oLng, s.lat, s.lng) }))
-    .filter(s => s.d <= 800).sort((a,b) => a.d - b.d).slice(0, 4);
-  const nearDestStations = UNIQUE_STATIONS
-    .map(s => ({ ...s, d:haversineM(dLat, dLng, s.lat, s.lng) }))
-    .filter(s => s.d <= 800).sort((a,b) => a.d - b.d).slice(0, 4);
-
-  // Build stop→routes index
-  const stopToRoutes = {};
-  for (const [key, stops] of Object.entries(BUS_ROUTES)) {
-    const serviceNo = key.split("_")[0];
-    stops.forEach((code, idx) => {
-      if (!stopToRoutes[code]) stopToRoutes[code] = [];
-      stopToRoutes[code].push({ key, serviceNo, stops, idx });
-    });
-  }
-
+  const BUS_MIN = 3, MRT_MIN = 2, TRANSFER_PENALTY = 5;
   const results = [];
   const seen = new Set();
+
+  function stopData(code) { const v = BUS_STOPS[code]; return v ? { code, lat:v[0], lng:v[1], name:v[2] } : null; }
+
+  function buildLeg(stops, fromIdx, toIdx) {
+    return stops.slice(fromIdx, toIdx+1).map(c => { const v = BUS_STOPS[c]; return v ? { code:c, lat:v[0], lng:v[1], name:v[2] } : { code:c, lat:0, lng:0, name:c }; });
+  }
+
+  function makeAlerts(legs) {
+    return legs.map((leg, i) => {
+      const last = leg.stops[leg.stops.length-1];
+      const isLast = i === legs.length-1;
+      if (isLast) return { id:`alight-${last.code}`, type:"alight", stopCode:last.code, stopName:last.name, radiusM:400, message:"Alight now!", detail:`${last.name}`, color:"#009645", vibratePattern:[300,100,300,100,600], lat:last.lat, lng:last.lng };
+      const next = legs[i+1];
+      const label = next.line === "BUS" ? `Bus ${next.serviceNo}` : (LINE_META[next.line]?.label || next.line);
+      return { id:`xfer-${i}-${last.code}`, type:"transfer", stopCode:last.code, stopName:last.name, radiusM:400, message:"Get ready to transfer", detail:`Board ${label} at ${last.name}`, color:"#F59E0B", vibratePattern:[200,100,200], lat:last.lat, lng:last.lng };
+    });
+  }
+
   function addResult(r) {
-    const key = r.legs.map(l => (l.serviceNo||l.line) + l.stops[0].code).join("|");
-    if (!seen.has(key)) { seen.add(key); results.push(r); }
+    const k = r.legs.map(l => (l.serviceNo||l.line)+l.stops[0].code+l.stops[l.stops.length-1].code).join("|");
+    if (!seen.has(k)) { seen.add(k); results.push(r); }
   }
 
-  // ── 1. Pure MRT ──────────────────────────────────────────────────────────
-  for (const os of nearOriginStations.slice(0,2)) {
-    for (const ds of nearDestStations.slice(0,2)) {
-      if (os.name === ds.name) continue;
-      const path = findPathFewestTransfers(os.name, ds.name) || findPath(os.name, ds.name);
-      if (!path) continue;
-      const legs = pathToLegs(path);
-      if (!legs.length) continue;
-      const alerts = buildAlerts(legs);
-      const stopCount = [...new Set(path.map(c => STATIONS.find(s=>s.code===c)?.name))].length - 1;
-      addResult({ type:"mrt", label:`🚇 MRT: ${os.name} → ${ds.name}`, legs, alerts,
-        stopCount, transfers:legs.length-1, estMins:stopCount*MRT_MIN+(legs.length-1)*TRANSFER_PENALTY,
-        fromName:os.name, toName:ds.name });
-    }
-  }
-
-  // ── 2. Direct bus (1 leg) ────────────────────────────────────────────────
-  for (const [key, stops] of Object.entries(BUS_ROUTES)) {
-    const serviceNo = key.split("_")[0];
-    let oIdx = -1;
-    const candidates = [];
-    for (let i = 0; i < stops.length; i++) {
-      if (nearOriginCodes.has(stops[i]) && oIdx === -1) oIdx = i;
-      if (oIdx !== -1 && i > oIdx && nearDestCodes.has(stops[i])) {
-        const sv = BUS_STOPS[stops[i]];
-        if (sv) candidates.push({ i, code:stops[i], lat:sv[0], lng:sv[1], name:sv[2], d:haversineM(dLat,dLng,sv[0],sv[1]) });
-      }
-    }
-    if (oIdx === -1 || !candidates.length) continue;
-    const best = candidates.sort((a,b) => a.d - b.d)[0];
-    const fv = BUS_STOPS[stops[oIdx]]; if (!fv) continue;
-    const stopCount = best.i - oIdx;
-    const legStops = buildLegStops(stops, oIdx, best.i);
-    const legs = [{ line:"BUS", serviceNo, stops:legStops }];
-    addResult({ type:"bus", label:`🚌 Bus ${serviceNo}`, legs, alerts:buildAlertsFull(legs),
-      stopCount, transfers:0, estMins:stopCount*BUS_MIN,
-      fromName:fv[2], toName:best.name });
-  }
-
-  // ── 3. Bus → Bus (2 legs, transfer at stop within walking distance) ───────
-  for (const [key1, stops1] of Object.entries(BUS_ROUTES)) {
-    const svc1 = key1.split("_")[0];
-    let oIdx = -1;
-    for (let i = 0; i < stops1.length; i++) {
-      if (nearOriginCodes.has(stops1[i]) && oIdx === -1) { oIdx = i; break; }
-    }
-    if (oIdx === -1) continue;
-    const fv = BUS_STOPS[stops1[oIdx]]; if (!fv) continue;
-
-    for (let i = oIdx+2; i < stops1.length; i++) {
-      const xCode = stops1[i];
-      const xv = BUS_STOPS[xCode]; if (!xv) continue;
-      // Find all stops within TRANSFER_WALK of this stop
-      const nearX = Object.entries(BUS_STOPS)
-        .filter(([c,v]) => c !== xCode && haversineM(xv[0],xv[1],v[0],v[1]) <= TRANSFER_WALK)
-        .map(([c]) => c);
-      const transferStops = [xCode, ...nearX];
-
-      for (const xCode2 of transferStops) {
-        const routes2 = stopToRoutes[xCode2] || [];
-        for (const r2 of routes2) {
-          if (r2.serviceNo === svc1) continue;
-          const idx2 = r2.stops.indexOf(xCode2);
-          const candidates2 = [];
-          for (let j = idx2+1; j < r2.stops.length; j++) {
-            if (nearDestCodes.has(r2.stops[j])) {
-              const sv = BUS_STOPS[r2.stops[j]];
-              if (sv) candidates2.push({ j, code:r2.stops[j], lat:sv[0], lng:sv[1], name:sv[2], d:haversineM(dLat,dLng,sv[0],sv[1]) });
-            }
-          }
-          if (!candidates2.length) continue;
-          const best2 = candidates2.sort((a,b) => a.d - b.d)[0];
-          const stopCount = (i-oIdx) + (best2.j-idx2);
-          if (stopCount > 40) continue; // sanity cap
-          const xv2 = BUS_STOPS[xCode2]; if (!xv2) continue;
-          const legs = [
-            { line:"BUS", serviceNo:svc1, stops:buildLegStops(stops1, oIdx, i) },
-            { line:"BUS", serviceNo:r2.serviceNo, stops:buildLegStops(r2.stops, idx2, best2.j) },
-          ];
-          addResult({ type:"bus+bus", label:`🚌 Bus ${svc1} → Bus ${r2.serviceNo}`,
-            legs, alerts:buildAlertsFull(legs),
-            stopCount, transfers:1, estMins:stopCount*BUS_MIN+TRANSFER_PENALTY,
-            fromName:fv[2], toName:best2.name });
-        }
-      }
-      if (results.filter(r=>r.type==="bus+bus").length > 20) break; // cap
-    }
-    if (results.filter(r=>r.type==="bus+bus").length > 20) break;
-  }
-
-  // ── 4. Bus+MRT, MRT+Bus ──────────────────────────────────────────────────
-  // Bus to MRT station, then MRT to dest
-  for (const ds of nearDestStations.slice(0,2)) {
-    const stationStops = Object.entries(BUS_STOPS)
-      .map(([code,v]) => ({ code, lat:v[0], lng:v[1], d:haversineM(ds.lat,ds.lng,v[0],v[1]) }))
-      .filter(s => s.d <= 400).map(s => s.code);
-    if (!stationStops.length) continue;
-    const stationDestCodes = new Set(stationStops);
+  // Find best direct bus from origin stops to a set of dest codes
+  function findDirectBusLeg(originCodes, destCodes, dLat, dLng) {
+    const found = [];
     for (const [key, stops] of Object.entries(BUS_ROUTES)) {
       const svc = key.split("_")[0];
-      let oIdx = -1;
-      const candidates = [];
+      let oIdx = -1; const cands = [];
       for (let i = 0; i < stops.length; i++) {
-        if (nearOriginCodes.has(stops[i]) && oIdx === -1) oIdx = i;
-        if (oIdx !== -1 && i > oIdx && stationDestCodes.has(stops[i])) {
-          const sv = BUS_STOPS[stops[i]]; if (sv) candidates.push({ i, code:stops[i] });
+        if (originCodes.has(stops[i]) && oIdx === -1) oIdx = i;
+        if (oIdx !== -1 && i > oIdx && destCodes.has(stops[i])) {
+          const v = BUS_STOPS[stops[i]]; if (v) cands.push({ i, code:stops[i], lat:v[0], lng:v[1], name:v[2], d:haversineM(dLat,dLng,v[0],v[1]) });
         }
       }
-      if (oIdx === -1 || !candidates.length) continue;
+      if (oIdx === -1 || !cands.length) continue;
+      const best = cands.sort((a,b) => a.d-b.d)[0];
       const fv = BUS_STOPS[stops[oIdx]]; if (!fv) continue;
-      const xfer = candidates[0];
-      for (const nearDs of nearDestStations.slice(0,2)) {
-        if (ds.name !== nearDs.name) continue;
-        // Try MRT from this station to dest stations
-        for (const finalDs of nearDestStations.slice(0,2)) {
-          if (ds.name === finalDs.name) continue;
-          const path = findPathFewestTransfers(ds.name, finalDs.name) || findPath(ds.name, finalDs.name);
-          if (!path) continue;
-          const mrtLegs = pathToLegs(path);
-          if (!mrtLegs.length) continue;
-          const busStops = buildLegStops(stops, oIdx, xfer.i);
-          const legs = [{ line:"BUS", serviceNo:svc, stops:busStops }, ...mrtLegs];
-          const stopCount = (xfer.i - oIdx) + [...new Set(path.map(c=>STATIONS.find(s=>s.code===c)?.name))].length - 1;
-          addResult({ type:"bus+mrt", label:`🚌 Bus ${svc} → 🚇 MRT`,
-            legs, alerts:buildAlertsFull(legs),
-            stopCount, transfers:1+mrtLegs.length-1, estMins:stopCount*BUS_MIN+TRANSFER_PENALTY,
-            fromName:fv[2], toName:finalDs.name });
+      found.push({ svc, oIdx, destIdx:best.i, from:{ code:stops[oIdx], lat:fv[0], lng:fv[1], name:fv[2] }, to:best, stops, stopCount:best.i-oIdx });
+    }
+    return found.sort((a,b) => a.stopCount-b.stopCount).slice(0,3);
+  }
+
+  // Nearby stops
+  const nearOStops = Object.entries(BUS_STOPS).map(([c,v]) => ({ code:c, lat:v[0], lng:v[1], d:haversineM(oLat,oLng,v[0],v[1]) })).filter(s=>s.d<=600).sort((a,b)=>a.d-b.d).slice(0,10);
+  const nearDStops = Object.entries(BUS_STOPS).map(([c,v]) => ({ code:c, lat:v[0], lng:v[1], d:haversineM(dLat,dLng,v[0],v[1]) })).filter(s=>s.d<=300).sort((a,b)=>a.d-b.d).slice(0,10);
+  const oCodes = new Set(nearOStops.map(s=>s.code));
+  const dCodes = new Set(nearDStops.map(s=>s.code));
+
+  // Nearby MRT stations
+  const oStations = UNIQUE_STATIONS.map(s=>({...s,d:haversineM(oLat,oLng,s.lat,s.lng)})).filter(s=>s.d<=800).sort((a,b)=>a.d-b.d).slice(0,3);
+  const dStations = UNIQUE_STATIONS.map(s=>({...s,d:haversineM(dLat,dLng,s.lat,s.lng)})).filter(s=>s.d<=800).sort((a,b)=>a.d-b.d).slice(0,3);
+
+  // 1. Pure MRT
+  for (const os of oStations.slice(0,2)) for (const ds of dStations.slice(0,2)) {
+    if (os.name===ds.name) continue;
+    const path = findPathFewestTransfers(os.name,ds.name)||findPath(os.name,ds.name); if (!path) continue;
+    const legs = pathToLegs(path); if (!legs.length) continue;
+    const sc = [...new Set(path.map(c=>STATIONS.find(s=>s.code===c)?.name))].length-1;
+    addResult({ type:"mrt", label:`🚇 MRT only`, legs, alerts:buildAlerts(legs), stopCount:sc, transfers:legs.length-1, estMins:sc*MRT_MIN+(legs.length-1)*TRANSFER_PENALTY, fromName:os.name, toName:ds.name });
+  }
+
+  // 2. Direct bus
+  const directBuses = findDirectBusLeg(oCodes, dCodes, dLat, dLng);
+  for (const b of directBuses) {
+    const legs = [{ line:"BUS", serviceNo:b.svc, stops:buildLeg(b.stops,b.oIdx,b.destIdx) }];
+    addResult({ type:"bus", label:`🚌 Bus ${b.svc}`, legs, alerts:makeAlerts(legs), stopCount:b.stopCount, transfers:0, estMins:b.stopCount*BUS_MIN, fromName:b.from.name, toName:b.to.name });
+  }
+
+  // 3. Bus → MRT → (walk to dest)
+  for (const ds of dStations.slice(0,2)) {
+    const dsStops = Object.entries(BUS_STOPS).map(([c,v])=>({code:c,d:haversineM(ds.lat,ds.lng,v[0],v[1])})).filter(s=>s.d<=500);
+    const dsCodes = new Set(dsStops.map(s=>s.code));
+    const buses = findDirectBusLeg(oCodes, dsCodes, ds.lat, ds.lng);
+    for (const b of buses.slice(0,2)) {
+      for (const finalDs of dStations.slice(0,2)) {
+        if (ds.name===finalDs.name) continue;
+        const path = findPathFewestTransfers(ds.name,finalDs.name)||findPath(ds.name,finalDs.name); if (!path) continue;
+        const mrtLegs = pathToLegs(path); if (!mrtLegs.length) continue;
+        const busStops = buildLeg(b.stops,b.oIdx,b.destIdx);
+        const legs = [{ line:"BUS", serviceNo:b.svc, stops:busStops }, ...mrtLegs];
+        const sc = b.stopCount + [...new Set(path.map(c=>STATIONS.find(s=>s.code===c)?.name))].length-1;
+        addResult({ type:"bus+mrt", label:`🚌 Bus ${b.svc} → 🚇 MRT`, legs, alerts:makeAlerts(legs), stopCount:sc, transfers:1+mrtLegs.length-1, estMins:sc*BUS_MIN+TRANSFER_PENALTY, fromName:b.from.name, toName:finalDs.name });
+      }
+    }
+  }
+
+  // 4. MRT → Bus
+  for (const os of oStations.slice(0,2)) {
+    for (const ds of dStations.slice(0,2)) {
+      if (os.name===ds.name) continue;
+      const path = findPathFewestTransfers(os.name,ds.name)||findPath(os.name,ds.name); if (!path) continue;
+      const mrtLegs = pathToLegs(path); if (!mrtLegs.length) continue;
+      const dsStops = Object.entries(BUS_STOPS).map(([c,v])=>({code:c,d:haversineM(ds.lat,ds.lng,v[0],v[1])})).filter(s=>s.d<=500);
+      const dsBoardCodes = new Set(dsStops.map(s=>s.code));
+      const buses = findDirectBusLeg(dsBoardCodes, dCodes, dLat, dLng);
+      for (const b of buses.slice(0,2)) {
+        const busStops = buildLeg(b.stops,b.oIdx,b.destIdx);
+        const legs = [...mrtLegs, { line:"BUS", serviceNo:b.svc, stops:busStops }];
+        const sc = [...new Set(path.map(c=>STATIONS.find(s=>s.code===c)?.name))].length-1 + b.stopCount;
+        addResult({ type:"mrt+bus", label:`🚇 MRT → 🚌 Bus ${b.svc}`, legs, alerts:makeAlerts(legs), stopCount:sc, transfers:mrtLegs.length, estMins:sc*MRT_MIN+TRANSFER_PENALTY, fromName:os.name, toName:b.to.name });
+      }
+    }
+  }
+
+  // 5. Bus → MRT → Bus
+  for (const os of oStations.slice(0,2)) {
+    const osStops = Object.entries(BUS_STOPS).map(([c,v])=>({code:c,d:haversineM(os.lat,os.lng,v[0],v[1])})).filter(s=>s.d<=500);
+    const osBoardCodes = new Set(osStops.map(s=>s.code));
+    const bus1List = findDirectBusLeg(oCodes, osBoardCodes, os.lat, os.lng);
+    for (const b1 of bus1List.slice(0,2)) {
+      for (const ds of dStations.slice(0,2)) {
+        if (os.name===ds.name) continue;
+        const path = findPathFewestTransfers(os.name,ds.name)||findPath(os.name,ds.name); if (!path) continue;
+        const mrtLegs = pathToLegs(path); if (!mrtLegs.length) continue;
+        const dsStops = Object.entries(BUS_STOPS).map(([c,v])=>({code:c,d:haversineM(ds.lat,ds.lng,v[0],v[1])})).filter(s=>s.d<=500);
+        const dsBoardCodes = new Set(dsStops.map(s=>s.code));
+        const bus2List = findDirectBusLeg(dsBoardCodes, dCodes, dLat, dLng);
+        for (const b2 of bus2List.slice(0,1)) {
+          const bus1Stops = buildLeg(b1.stops,b1.oIdx,b1.destIdx);
+          const bus2Stops = buildLeg(b2.stops,b2.oIdx,b2.destIdx);
+          const legs = [{ line:"BUS", serviceNo:b1.svc, stops:bus1Stops }, ...mrtLegs, { line:"BUS", serviceNo:b2.svc, stops:bus2Stops }];
+          const sc = b1.stopCount + [...new Set(path.map(c=>STATIONS.find(s=>s.code===c)?.name))].length-1 + b2.stopCount;
+          addResult({ type:"bus+mrt+bus", label:`🚌 Bus ${b1.svc} → 🚇 MRT → 🚌 Bus ${b2.svc}`, legs, alerts:makeAlerts(legs), stopCount:sc, transfers:2+mrtLegs.length-1, estMins:sc*BUS_MIN+2*TRANSFER_PENALTY, fromName:b1.from.name, toName:b2.to.name });
         }
       }
     }
   }
 
-  // Sort by fewest transfers then time, return top 5
-  return results
-    .sort((a,b) => a.transfers - b.transfers || a.estMins - b.estMins)
-    .slice(0, 5);
+  return results.sort((a,b) => a.transfers-b.transfers||a.estMins-b.estMins).slice(0,5);
 }
+
 
 function NearbyStopPicker({ stops, selectedCoord, onPick }) {
   if (!stops.length) return null;
