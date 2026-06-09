@@ -553,7 +553,8 @@ function BusStopField({ label, value, onChange, status, name }) {
   return (
     <div style={{ marginBottom:12 }}>
       <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:6 }}>{label}</div>
-      <div style={{ background:"#161B27", borderRadius:14, border:`1.5px solid ${borderColor}`, transition:"border-color .2s", padding:"0 14px", display:"flex", alignItems:"center", gap:10 }}>
+      <div style={{ background:"#161B27", borderRadius:14, border:`1.5px solid ${borderColor}`, transition:"border-color .2s", padding:"14px 16px", display:"flex", alignItems:"center", gap:10, cursor:"text" }}
+        onClick={e => e.currentTarget.querySelector("input").focus()}>
         <span style={{ fontSize:16 }}>{icon}</span>
         <input
           type="tel" inputMode="numeric" maxLength={6}
@@ -609,7 +610,7 @@ function BusInputPanel({ onTrack }) {
             .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(r.lat, r.lng, v[0], v[1]) }))
             .filter(s => s.d <= 600)
             .sort((a, b) => a.d - b.d)
-            .slice(0, 5);
+            .slice(0, 3);
           setNearby(nearby);
           // Auto-pick nearest but mark as not confirmed
           const nearest = nearby[0];
@@ -794,7 +795,7 @@ function BusInputPanel({ onTrack }) {
         <NearMeButton onFound={pos => {
           const nearby = Object.entries(BUS_STOPS)
             .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(pos.lat, pos.lng, v[0], v[1]) }))
-            .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 5);
+            .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 3);
           setFromNearby(nearby);
           if (nearby[0]) setFrom(prev => ({ ...prev, value:nearby[0].code, coord:{ lat:nearby[0].lat, lng:nearby[0].lng }, name:nearby[0].name, status:"ok", picked:false }));
         }} style={{ position:"absolute", right:10, top:18 }} />
@@ -871,7 +872,7 @@ function computeMixedRoutes(oLat, oLng, dLat, dLng) {
       .map(s => ({ ...s, d: haversineM(lat, lng, s.lat, s.lng) }))
       .filter(s => s.d <= STATION_RADIUS)
       .sort((a, b) => a.d - b.d)
-      .slice(0, 5);
+      .slice(0, 3);
   }
 
   // Find bus stops near a point
@@ -1081,7 +1082,7 @@ function MixedInputPanel({ onTrack }) {
         const r = await geocodePostal(v);
         const nearby = Object.entries(BUS_STOPS)
           .map(([code, sv]) => ({ code, lat:sv[0], lng:sv[1], name:sv[2], d:haversineM(r.lat, r.lng, sv[0], sv[1]) }))
-          .filter(s => s.d <= 600).sort((a,b) => a.d - b.d).slice(0, 5);
+          .filter(s => s.d <= 600).sort((a,b) => a.d - b.d).slice(0, 3);
         const nearest = nearby[0];
         if (side === "from") {
           setFromCoord(nearest ? { lat:nearest.lat, lng:nearest.lng } : { lat:r.lat, lng:r.lng });
@@ -1125,7 +1126,7 @@ function MixedInputPanel({ onTrack }) {
         <NearMeButton onFound={pos => {
           const nearby = Object.entries(BUS_STOPS)
             .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(pos.lat, pos.lng, v[0], v[1]) }))
-            .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 5);
+            .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 3);
           setFromNearby(nearby);
           setFromPicked(false);
           if (nearby[0]) { setFromCoord({ lat:nearby[0].lat, lng:nearby[0].lng }); setFromAddr(nearby[0].name); setFromPostal(nearby[0].code); setFromStatus("ok"); }
