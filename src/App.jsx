@@ -864,15 +864,20 @@ function BusInputPanel({ onTrack }) {
 // Step-by-step: pick stop → pick service → pick destination/transfer → repeat
 
 function servicesAtStop(stopCode) {
-  // Bus services that stop here
+  // Show each direction separately with its terminus, so user can tell which way the bus goes
   const buses = [];
   const seen = new Set();
   for (const [key, stops] of Object.entries(BUS_ROUTES)) {
     const svc = key.split("_")[0];
-    if (stops.includes(stopCode) && !seen.has(svc)) {
-      seen.add(svc);
-      buses.push({ type:"bus", id:svc, label:`Bus ${svc}`, color:"#F59E0B" });
-    }
+    const idx = stops.indexOf(stopCode);
+    if (idx === -1) continue;
+    // Terminus is the last stop of this direction
+    const terminusCode = stops[stops.length - 1];
+    const terminusName = BUS_STOPS[terminusCode]?.[2] || terminusCode;
+    const dirKey = `${svc}|${terminusCode}`;
+    if (seen.has(dirKey)) continue;
+    seen.add(dirKey);
+    buses.push({ type:"bus", id:svc, dirKey, label:`Bus ${svc}`, terminus:terminusName, color:"#F59E0B", routeKey:key });
   }
   buses.sort((a,b) => a.id.localeCompare(b.id, undefined, { numeric:true }));
   return buses;
@@ -881,13 +886,35 @@ function servicesAtStop(stopCode) {
 function servicesAtStation(stationName) {
   const station = UNIQUE_STATIONS.find(s => s.name === stationName);
   if (!station) return [];
-  return (station.lines || [])
-    .filter(l => LINE_META[l])
-    .map(l => ({ type:"mrt", id:l, label:LINE_META[l].short + " Line", color:LINE_META[l].color, line:l, stationName }));
+  const services = [];
+  for (const l of (station.lines || []).filter(l => LINE_META[l])) {
+    const seq = LINE_SEQUENCES[l];
+    if (!seq) { services.push({ type:"mrt", id:l, label:LINE_META[l].short+" Line", color:LINE_META[l].color, line:l, stationName }); continue; }
+    const stationCodes = seq.map(c => STATIONS.find(s => s.code===c)).filter(Boolean);
+    const idx = stationCodes.findIndex(s => s.name === stationName);
+    if (idx === -1) { services.push({ type:"mrt", id:l, label:LINE_META[l].short+" Line", color:LINE_META[l].color, line:l, stationName }); continue; }
+    // Forward direction
+    if (idx < stationCodes.length - 1) {
+      const terminus = stationCodes[stationCodes.length-1].name;
+      services.push({ type:"mrt", id:`${l}_fwd`, label:LINE_META[l].short+" Line", terminus, color:LINE_META[l].color, line:l, stationName, direction:"fwd" });
+    }
+    // Backward direction
+    if (idx > 0) {
+      const terminus = stationCodes[0].name;
+      services.push({ type:"mrt", id:`${l}_bwd`, label:LINE_META[l].short+" Line", terminus, color:LINE_META[l].color, line:l, stationName, direction:"bwd" });
+    }
+  }
+  return services;
 }
 
-function stopsForBus(serviceNo, fromStopCode) {
-  // Find the route direction where fromStopCode appears earliest
+function stopsForBus(serviceNo, fromStopCode, routeKey) {
+  // Use specific routeKey if provided (preserves correct direction)
+  const entry = routeKey ? BUS_ROUTES[routeKey] : null;
+  if (entry) {
+    const idx = entry.indexOf(fromStopCode);
+    if (idx !== -1) return entry.slice(idx+1).map(c => { const v = BUS_STOPS[c]; return v ? { code:c, lat:v[0], lng:v[1], name:v[2] } : null; }).filter(Boolean);
+  }
+  // Fallback: pick direction with most stops remaining
   const candidates = [];
   for (const [key, stops] of Object.entries(BUS_ROUTES)) {
     if (key.split("_")[0] !== serviceNo) continue;
@@ -895,25 +922,22 @@ function stopsForBus(serviceNo, fromStopCode) {
     if (idx !== -1) candidates.push({ stops, idx });
   }
   if (!candidates.length) return [];
-  // Pick direction where stop appears and has the most stops remaining
   candidates.sort((a,b) => (b.stops.length - b.idx) - (a.stops.length - a.idx));
   const { stops, idx } = candidates[0];
-  return stops.slice(idx+1).map(c => {
-    const v = BUS_STOPS[c];
-    return v ? { code:c, lat:v[0], lng:v[1], name:v[2] } : null;
-  }).filter(Boolean);
+  return stops.slice(idx+1).map(c => { const v = BUS_STOPS[c]; return v ? { code:c, lat:v[0], lng:v[1], name:v[2] } : null; }).filter(Boolean);
 }
 
-function stationsForMRTLine(line, fromStationName) {
+function stationsForMRTLine(line, fromStationName, direction) {
   const seq = LINE_SEQUENCES[line]; if (!seq) return [];
   const codes = seq.map(c => STATIONS.find(s => s.code === c)).filter(Boolean);
-  // Find from station index
   const fromIdx = codes.findIndex(s => s.name === fromStationName);
   if (fromIdx === -1) return codes.map(s => ({ code:s.code, name:s.name, lat:s.lat, lng:s.lng, isMRT:true, lines:s.lines }));
-  // Both directions
+  // Respect direction if specified
+  if (direction === "fwd") return codes.slice(fromIdx+1).map(s => ({ code:s.code, name:s.name, lat:s.lat, lng:s.lng, isMRT:true, lines:s.lines }));
+  if (direction === "bwd") return codes.slice(0, fromIdx).reverse().map(s => ({ code:s.code, name:s.name, lat:s.lat, lng:s.lng, isMRT:true, lines:s.lines }));
+  // No direction — show both, deduplicated
   const forward  = codes.slice(fromIdx+1).map(s => ({ code:s.code, name:s.name, lat:s.lat, lng:s.lng, isMRT:true, lines:s.lines }));
   const backward = codes.slice(0, fromIdx).reverse().map(s => ({ code:s.code, name:s.name, lat:s.lat, lng:s.lng, isMRT:true, lines:s.lines }));
-  // Deduplicate by name
   const seen = new Set();
   return [...forward, ...backward].filter(s => { if (seen.has(s.name)) return false; seen.add(s.name); return true; });
 }
@@ -962,22 +986,28 @@ function JourneyBuilder({ onTrack }) {
   }
 
   function resolveOrigin(val) {
-    const clean = val.replace(/\D/g,"").slice(0,6);
-    setOriginInput(clean);
-    if (clean.length === 5 && BUS_STOPS[clean]) {
-      const v = BUS_STOPS[clean];
-      const stop = { code:clean, lat:v[0], lng:v[1], name:v[2] };
+    setOriginInput(val);
+    const digits = val.replace(/\D/g,"");
+
+    // 5-digit bus stop code
+    if (/^\d{5}$/.test(val.trim()) && BUS_STOPS[val.trim()]) {
+      const v = BUS_STOPS[val.trim()];
+      const stop = { code:val.trim(), lat:v[0], lng:v[1], name:v[2] };
       setOriginStop(stop); setCurrentStop(stop); setStep("service"); setOriginStatus("ok");
-    } else if (clean.length === 6) {
+      setNearbyOrigin([]);
+      return;
+    }
+
+    // 6-digit postal code
+    if (/^\d{6}$/.test(val.trim())) {
       setOriginStatus("loading");
       clearTimeout(debounce.current);
       debounce.current = setTimeout(async () => {
         try {
-          const r = await geocodePostal(clean);
+          const r = await geocodePostal(val.trim());
           const nearby = Object.entries(BUS_STOPS)
             .map(([code,v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(r.lat,r.lng,v[0],v[1]) }))
             .filter(s => s.d <= 400).sort((a,b) => a.d-b.d).slice(0,3);
-          // Also check for nearby MRT stations
           const nearStations = UNIQUE_STATIONS
             .map(s => ({ ...s, d:haversineM(r.lat,r.lng,s.lat,s.lng) }))
             .filter(s => s.d <= 400).sort((a,b) => a.d-b.d).slice(0,2)
@@ -986,6 +1016,17 @@ function JourneyBuilder({ onTrack }) {
           setOriginStatus("ok");
         } catch { setOriginStatus("error"); }
       }, 600);
+      return;
+    }
+
+    // Text — search MRT station names
+    if (val.trim().length >= 2) {
+      const matched = UNIQUE_STATIONS
+        .filter(s => s.name.toLowerCase().includes(val.trim().toLowerCase()))
+        .slice(0, 5)
+        .map(s => ({ isMRT:true, name:s.name, lat:s.lat, lng:s.lng, lines:s.lines, d:0 }));
+      setNearbyOrigin(matched);
+      setOriginStatus(matched.length > 0 ? "ok" : "idle");
     } else {
       setOriginStatus("idle"); setNearbyOrigin([]);
     }
@@ -1004,7 +1045,7 @@ function JourneyBuilder({ onTrack }) {
     // Build the leg
     let newLeg;
     if (selectedService.type === "bus") {
-      const allStops = stopsForBus(selectedService.id, currentStop.code);
+      const allStops = stopsForBus(selectedService.id, currentStop.code, selectedService.routeKey);
       const toIdx = allStops.findIndex(s => s.code === stop.code);
       const legStops = [currentStop, ...allStops.slice(0, toIdx+1)];
       newLeg = { type:"bus", serviceNo:selectedService.id, stops:legStops };
@@ -1038,7 +1079,7 @@ function JourneyBuilder({ onTrack }) {
   const serviceStops = selectedService ? (
     selectedService.type === "bus"
       ? stopsForBus(selectedService.id, currentStop.code)
-      : stationsForMRTLine(selectedService.line, currentStop.name)
+      : stationsForMRTLine(selectedService.line, currentStop.name, selectedService.direction)
   ) : [];
   const filteredStops = serviceStops.filter(s => s.name.toLowerCase().includes(stopFilter.toLowerCase())).slice(0, 50);
 
@@ -1076,16 +1117,28 @@ function JourneyBuilder({ onTrack }) {
   if (step === "origin") return (
     <div>
       <div style={{ color:"#374151", fontSize:12, marginBottom:10 }}>Enter your starting stop code or postal code</div>
-      <BusStopField label="Starting from" value={originInput} onChange={resolveOrigin} status={originStatus} name={originStop?.name}
-        extra={<NearMeButton onFound={pos => {
-          const nearby = Object.entries(BUS_STOPS)
-            .map(([c,v]) => ({ code:c, lat:v[0], lng:v[1], name:v[2], d:haversineM(pos.lat,pos.lng,v[0],v[1]) }))
-            .filter(s => s.d <= 400).sort((a,b) => a.d-b.d).slice(0,3);
-          const nearStations = UNIQUE_STATIONS.map(s => ({ ...s, isMRT:true, d:haversineM(pos.lat,pos.lng,s.lat,s.lng) })).filter(s => s.d <= 300).sort((a,b) => a.d-b.d).slice(0,2);
-          setNearbyOrigin([...nearby, ...nearStations].sort((a,b) => a.d-b.d));
-          if (nearby[0]) setOriginStatus("ok");
-        }} />}
-      />
+      <div style={{ marginBottom:12 }}>
+        <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:6 }}>Starting from</div>
+        <div style={{ background:"#161B27", borderRadius:14, border:`1.5px solid ${originStatus==="ok"?"#009645":originStatus==="error"?"#EF4444":originStatus==="loading"?"#F59E0B":"#1E2D40"}`, padding:"14px 16px", display:"flex", alignItems:"center", gap:10 }}
+          onClick={e => e.currentTarget.querySelector("input").focus()}>
+          <span style={{ fontSize:16 }}>{originStatus==="ok"?"✅":originStatus==="loading"?"⏳":originStatus==="error"?"❌":"🚏"}</span>
+          <input
+            placeholder="Station name, stop code or postal"
+            value={originInput}
+            onChange={e => resolveOrigin(e.target.value)}
+            style={{ flex:1, background:"transparent", border:"none", color:"#fff", fontSize:15, padding:0, fontFamily:"inherit", outline:"none" }}
+          />
+          <NearMeButton onFound={pos => {
+            const nearby = Object.entries(BUS_STOPS)
+              .map(([c,v]) => ({ code:c, lat:v[0], lng:v[1], name:v[2], d:haversineM(pos.lat,pos.lng,v[0],v[1]) }))
+              .filter(s => s.d <= 400).sort((a,b) => a.d-b.d).slice(0,3);
+            const nearStations = UNIQUE_STATIONS.map(s => ({ ...s, isMRT:true, d:haversineM(pos.lat,pos.lng,s.lat,s.lng) })).filter(s => s.d <= 300).sort((a,b) => a.d-b.d).slice(0,2);
+            setNearbyOrigin([...nearby, ...nearStations].sort((a,b) => a.d-b.d));
+            if (nearby[0]) setOriginStatus("ok");
+          }} />
+        </div>
+        {originStop && <div style={{ color:"#009645", fontSize:12, marginTop:4, paddingLeft:4 }}>{originStop.name}</div>}
+      </div>
       {nearbyOrigin.length > 0 && (
         <div style={{ marginTop:-6, marginBottom:10 }}>
           <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your starting point:</div>
@@ -1114,10 +1167,11 @@ function JourneyBuilder({ onTrack }) {
       <div style={{ color:"#374151", fontSize:12, marginBottom:12 }}>Which service are you taking?</div>
       {allServices.length === 0 && <div style={{ color:"#EF4444", fontSize:12 }}>No services found at this stop.</div>}
       <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-        {allServices.map(svc => (
-          <button key={svc.id} onClick={() => pickService(svc)}
-            style={{ background:"#161B27", border:`1px solid ${svc.color}33`, borderRadius:10, padding:"8px 14px", color:svc.color, fontSize:13, fontWeight:800, cursor:"pointer" }}>
-            {svc.label}
+        {allServices.map((svc, i) => (
+          <button key={svc.dirKey||svc.id+i} onClick={() => pickService(svc)}
+            style={{ background:"#161B27", border:`1px solid ${svc.color}33`, borderRadius:10, padding:"8px 14px", color:svc.color, fontSize:13, fontWeight:800, cursor:"pointer", textAlign:"left" }}>
+            <div>{svc.label}</div>
+            {svc.terminus && <div style={{ color:"#6B7280", fontSize:10, fontWeight:400, marginTop:2 }}>→ {svc.terminus}</div>}
           </button>
         ))}
       </div>
@@ -1378,16 +1432,7 @@ export default function App() {
               <p style={{ color:"#374151", fontSize:13, margin:0 }}>Wake me up at my stop.</p>
             </div>
 
-            {/* Tabs */}
-            <div style={{ display:"flex", background:"#161B27", borderRadius:12, padding:4, marginBottom:18, border:"1px solid #1E2D40" }}>
-              {[["station","🚉 MRT"],["bus","🚌 Bus"],["mixed","🔀 Mixed"]].map(([mode, label]) => (
-                <button key={mode}
-                  onClick={() => { setInputMode(mode); setFromStation(null); setToStation(null); setFromPostal(""); setToPostal(""); setFromStatus("idle"); setToStatus("idle"); setRouteError(null); }}
-                  style={{ flex:1, padding:"9px 6px", borderRadius:9, border:"none", background:inputMode===mode?"#0D1117":"transparent", color:inputMode===mode?"#fff":"#4B5563", fontSize:12, fontWeight:700, cursor:"pointer", transition:"all .2s", boxShadow:inputMode===mode?"0 2px 8px rgba(0,0,0,.4)":"none" }}>
-                  {label}
-                </button>
-              ))}
-            </div>
+
 
             {/* MRT mode */}
             {inputMode === "station" && (
@@ -1429,27 +1474,7 @@ export default function App() {
               <JourneyBuilder onTrack={r => { setRoute(r); setScreen(S.CONFIRM); }} />
             )}
 
-            {routeError && <div style={{ color:"#EF4444", fontSize:12, marginBottom:10, paddingLeft:4 }}>{routeError}</div>}
 
-            {/* Bottom actions — only show for MRT/postal modes */}
-            {(inputMode === "station" || inputMode === "postal") && (
-              <div style={{ marginTop:"auto" }}>
-                <div style={{ background:"#0D1117", borderRadius:12, padding:"10px 14px", marginBottom:14, display:"flex", gap:10, border:"1px solid #1E2D40" }}>
-                  <span style={{ fontSize:15, flexShrink:0 }}>🔋</span>
-                  <p style={{ color:"#374151", fontSize:11, margin:0, lineHeight:1.5 }}><b style={{ color:"#4B5563" }}>Battery-friendly:</b> WiFi/cell location, not GPS chip.</p>
-                </div>
-                <div style={{ display:"flex", gap:8 }}>
-                  <button onClick={() => { setRouteMode("fastest"); buildRoute("fastest"); }} disabled={!canBuildRoute}
-                    style={{ flex:1, padding:"14px 8px", borderRadius:14, border:"none", background:canBuildRoute?"#D42E12":"#161B27", color:canBuildRoute?"#fff":"#374151", fontSize:13, fontWeight:700, cursor:canBuildRoute?"pointer":"not-allowed", boxShadow:canBuildRoute?"0 8px 24px rgba(212,46,18,.4)":"none", transition:"all .3s" }}>
-                    ⚡ Fewest Stops
-                  </button>
-                  <button onClick={() => { setRouteMode("least-transfers"); buildRoute("least-transfers"); }} disabled={!canBuildRoute}
-                    style={{ flex:1, padding:"14px 8px", borderRadius:14, border:"none", background:canBuildRoute?"#1D4ED8":"#161B27", color:canBuildRoute?"#fff":"#374151", fontSize:13, fontWeight:700, cursor:canBuildRoute?"pointer":"not-allowed", boxShadow:canBuildRoute?"0 8px 24px rgba(29,78,216,.4)":"none", transition:"all .3s" }}>
-                    🔁 Least Transfers
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
