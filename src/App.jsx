@@ -469,65 +469,59 @@ const LINE_ORDER = ["NSL","EWL","NEL","CCL","DTL","TEL"];
 
 function StationPicker({ label, value, onChange, extra }) {
   const [query, setQuery] = useState("");
-  const [lineFilter, setLineFilter] = useState(null);
-  const [open, setOpen] = useState(false);
+  const [focused, setFocused] = useState(false);
   const inputRef = useRef(null);
+  const containerRef = useRef(null);
 
-  const filtered = UNIQUE_STATIONS.filter(s => {
-    const matchName = s.name.toLowerCase().includes(query.toLowerCase());
-    const matchLine = lineFilter ? s.lines.includes(lineFilter) : true;
-    return matchName && matchLine;
-  }).slice(0,40);
+  const showSuggestions = focused && query.length > 0;
+  const filtered = showSuggestions ? UNIQUE_STATIONS.filter(s =>
+    s.name.toLowerCase().includes(query.toLowerCase())
+  ).slice(0, 6) : [];
 
-  function select(st) { onChange(st); setOpen(false); setQuery(""); setLineFilter(null); }
+  function select(st) {
+    onChange(st);
+    setQuery("");
+    setFocused(false);
+    inputRef.current?.blur();
+  }
+
+  function handleBlur(e) {
+    // Delay so tap on suggestion registers before blur hides it
+    setTimeout(() => {
+      if (!containerRef.current?.contains(document.activeElement)) setFocused(false);
+    }, 150);
+  }
 
   return (
-    <div style={{ marginBottom:12, position:"relative" }}>
+    <div ref={containerRef} style={{ marginBottom:12 }}>
       <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:6 }}>{label}</div>
-      <button onClick={() => { setOpen(true); setTimeout(() => inputRef.current?.focus(), 50); }}
-        style={{ width:"100%", background:"#161B27", borderRadius:14, border:`1.5px solid ${value?"#009645":"#1E2D40"}`, padding:"14px 16px", display:"flex", alignItems:"center", gap:10, cursor:"pointer", textAlign:"left", transition:"border-color .2s", boxSizing:"border-box", font:"inherit" }}>
+      <div style={{ background:"#161B27", borderRadius:showSuggestions?`14px 14px 0 0`:14, border:`1.5px solid ${value?"#009645":focused?"#60A5FA":"#1E2D40"}`, padding:"14px 16px", display:"flex", alignItems:"center", gap:10, transition:"border-color .2s", boxSizing:"border-box" }}>
         <span style={{ fontSize:16 }}>{value?"✅":"🚉"}</span>
-        {value ? (
-          <div style={{ flex:1 }}>
-            <div style={{ color:"#fff", fontSize:15, fontWeight:700 }}>{value.name}</div>
-            <div style={{ display:"flex", gap:4, marginTop:3, flexWrap:"wrap" }}>{value.lines.filter(l => LINE_META[l]).map(l => <LinePill key={l} line={l} small />)}</div>
-          </div>
-        ) : <span style={{ color:"#374151", fontSize:14, flex:1 }}>Select a station…</span>}
-        {extra && <div onClick={e => e.stopPropagation()}>{extra}</div>}
-        <span style={{ color:"#374151", fontSize:12 }}>▾</span>
-      </button>
-      {open && (
-        <div style={{ position:"fixed", inset:0, zIndex:100, background:"rgba(8,12,20,.92)", display:"flex", flexDirection:"column", animation:"fadeUp .2s ease" }}>
-          <div style={{ background:"#0D1117", borderBottom:"1px solid #1E2D40", padding:"16px 20px 12px" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
-              <button onClick={() => { setOpen(false); setQuery(""); setLineFilter(null); }} style={{ background:"#161B27", border:"none", color:"#6B7280", width:34, height:34, borderRadius:10, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>←</button>
-              <div style={{ flex:1, background:"#161B27", borderRadius:12, border:"1px solid #1E2D40", display:"flex", alignItems:"center", padding:"0 12px", gap:8 }}>
-                <span style={{ color:"#374151", fontSize:14 }}>🔍</span>
-                <input ref={inputRef} placeholder={`Search ${label.toLowerCase()}…`} value={query} onChange={e => setQuery(e.target.value)}
-                  style={{ flex:1, background:"transparent", border:"none", color:"#fff", fontSize:15, padding:"12px 0", fontFamily:"inherit" }} />
-                {query && <button onClick={() => setQuery("")} style={{ background:"none", border:"none", color:"#374151", cursor:"pointer", fontSize:16, padding:0 }}>✕</button>}
+        <input
+          ref={inputRef}
+          placeholder={value ? value.name : "Type a station name…"}
+          value={query}
+          onChange={e => { setQuery(e.target.value); if (value) onChange(null); }}
+          onFocus={() => setFocused(true)}
+          onBlur={handleBlur}
+          style={{ flex:1, background:"transparent", border:"none", color:value&&!query?"#fff":"#fff", fontSize:15, fontWeight:value&&!query?700:400, padding:0, fontFamily:"inherit", outline:"none" }}
+        />
+        {value && !query && <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{value.lines.filter(l => LINE_META[l]).map(l => <LinePill key={l} line={l} small />)}</div>}
+        {query && <button onMouseDown={e => e.preventDefault()} onClick={() => { setQuery(""); onChange(null); inputRef.current?.focus(); }} style={{ background:"none", border:"none", color:"#374151", cursor:"pointer", fontSize:14, padding:0, flexShrink:0 }}>✕</button>}
+        {extra && <div>{extra}</div>}
+      </div>
+      {showSuggestions && (
+        <div style={{ background:"#161B27", border:"1.5px solid #60A5FA", borderTop:"none", borderRadius:"0 0 14px 14px", overflow:"hidden" }}>
+          {filtered.length === 0 && <div style={{ color:"#374151", fontSize:13, padding:"12px 16px" }}>No stations found</div>}
+          {filtered.map(st => (
+            <div key={st.code} onMouseDown={e => e.preventDefault()} onClick={() => select(st)}
+              style={{ padding:"10px 16px", display:"flex", alignItems:"center", gap:10, cursor:"pointer", borderTop:"1px solid #0D1117" }}>
+              <div style={{ flex:1 }}>
+                <span style={{ color:"#fff", fontSize:14, fontWeight:600 }}>{st.name}</span>
               </div>
+              <div style={{ display:"flex", gap:3 }}>{st.lines.filter(l => LINE_META[l]).map(l => <LinePill key={l} line={l} small />)}</div>
             </div>
-            <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:2 }}>
-              <button onClick={() => setLineFilter(null)} style={{ background:lineFilter===null?"#fff":"#161B27", border:"1px solid #1E2D40", borderRadius:8, padding:"4px 12px", color:lineFilter===null?"#000":"#6B7280", fontSize:11, fontWeight:700, cursor:"pointer", flexShrink:0 }}>All</button>
-              {LINE_ORDER.map(l => {
-                const m = LINE_META[l]; const active = lineFilter===l;
-                return <button key={l} onClick={() => setLineFilter(active?null:l)} style={{ background:active?m.color:"#161B27", border:`1px solid ${active?m.color:"#1E2D40"}`, borderRadius:8, padding:"4px 12px", color:active?"#fff":"#6B7280", fontSize:11, fontWeight:700, cursor:"pointer", flexShrink:0 }}>{m.short}</button>;
-              })}
-            </div>
-          </div>
-          <div style={{ flex:1, overflowY:"auto", padding:"8px 0" }}>
-            {filtered.length===0 && <div style={{ color:"#374151", fontSize:14, textAlign:"center", padding:"32px 20px" }}>No stations found</div>}
-            {filtered.map(st => (
-              <button key={st.code} onClick={() => select(st)} style={{ width:"100%", background:"transparent", border:"none", padding:"12px 20px", display:"flex", alignItems:"center", gap:12, cursor:"pointer", textAlign:"left", borderBottom:"1px solid #0D1117" }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ color:"#fff", fontSize:14, fontWeight:600 }}>{st.name}</div>
-                  <div style={{ display:"flex", gap:4, marginTop:4, flexWrap:"wrap" }}>{st.lines.filter(l => LINE_META[l]).map(l => <LinePill key={l} line={l} small />)}</div>
-                </div>
-                <span style={{ color:"#374151", fontSize:12 }}>→</span>
-              </button>
-            ))}
-          </div>
+          ))}
         </div>
       )}
     </div>
