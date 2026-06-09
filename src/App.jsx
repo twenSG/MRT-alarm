@@ -556,8 +556,10 @@ function BusStopField({ label, value, onChange, status, name }) {
 function BusInputPanel({ onTrack }) {
   const [stopMap, setStopMap] = useState(null);
   const [loadingStops, setLoadingStops] = useState(false);
-  const [from, setFrom] = useState({ value:"", coord:null, name:"", status:"idle" });
-  const [to,   setTo]   = useState({ value:"", coord:null, name:"", status:"idle" });
+  const [from, setFrom] = useState({ value:"", coord:null, name:"", status:"idle", picked:false });
+  const [to,   setTo]   = useState({ value:"", coord:null, name:"", status:"idle", picked:false });
+  const [fromNearby, setFromNearby] = useState([]);
+  const [toNearby,   setToNearby]   = useState([]);
   const [routes, setRoutes] = useState(null);
   const [loading, setLoading] = useState(false);
   const [confirm, setConfirm] = useState(null); // { route, boardStop, alightStop, nearbyBoard, nearbyAlight }
@@ -571,23 +573,43 @@ function BusInputPanel({ onTrack }) {
     setLoadingStops(false);
   }, []);
 
-  function resolveInput(val, stopMap, side, setter) {
+  function resolveInput(val, stopMap, side, setter, setNearby) {
     const clean = val.replace(/\D/g,"").slice(0,6);
-    const update = { value:clean, coord:null, name:"", status:"idle" };
+    const update = { value:clean, coord:null, name:"", status:"idle", picked:false };
 
     if (clean.length === 5 && stopMap) {
       const s = stopMap[clean];
-      if (s) { update.coord = { lat:s[0], lng:s[1] }; update.name = s[2]; update.status = "ok"; }
+      if (s) { update.coord = { lat:s[0], lng:s[1] }; update.name = s[2]; update.status = "ok"; update.picked = true; }
       else { update.status = "error"; }
       setter(update);
+      setNearby([]);
     } else if (clean.length === 6) {
       update.status = "loading";
       setter(update);
+      setNearby([]);
       geocodePostal(clean)
-        .then(r => setter(prev => ({ ...prev, coord:{ lat:r.lat, lng:r.lng }, name:r.address, status:"ok" })))
+        .then(r => {
+          // Find nearest stops to the geocoded location
+          const nearby = Object.entries(BUS_STOPS)
+            .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(r.lat, r.lng, v[0], v[1]) }))
+            .filter(s => s.d <= 600)
+            .sort((a, b) => a.d - b.d)
+            .slice(0, 5);
+          setNearby(nearby);
+          // Auto-pick nearest but mark as not confirmed
+          const nearest = nearby[0];
+          setter(prev => ({
+            ...prev,
+            coord: nearest ? { lat:nearest.lat, lng:nearest.lng } : { lat:r.lat, lng:r.lng },
+            name: nearest ? nearest.name : r.address,
+            status: "ok",
+            picked: false, // user should confirm
+          }));
+        })
         .catch(() => setter(prev => ({ ...prev, status:"error" })));
     } else {
       setter(update);
+      setNearby([]);
     }
   }
 
@@ -752,8 +774,36 @@ function BusInputPanel({ onTrack }) {
         Enter a 5-digit bus stop code or 6-digit postal code
         {loadingStops && <span style={{ color:"#F59E0B", marginLeft:6 }}>⏳ Loading stop data…</span>}
       </div>
-      <BusStopField label="From" value={from.value} onChange={v => resolveInput(v, stopMap, "from", setFrom)} status={from.status} name={from.name} />
-      <BusStopField label="To"   value={to.value}   onChange={v => resolveInput(v, stopMap, "to",   setTo)}   status={to.status}   name={to.name}   />
+      <BusStopField label="From" value={from.value} onChange={v => resolveInput(v, stopMap, "from", setFrom, setFromNearby)} status={from.status} name={from.name} />
+      {fromNearby.length > 0 && !from.picked && (
+        <div style={{ marginTop:-6, marginBottom:10 }}>
+          <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your stop:</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            {fromNearby.map(s => (
+              <button key={s.code} onClick={() => { setFrom(prev => ({ ...prev, coord:{ lat:s.lat, lng:s.lng }, name:s.name, picked:true })); setFromNearby([]); }}
+                style={{ background:from.coord?.lat===s.lat?"#0a2a1a":"#161B27", border:`1px solid ${from.coord?.lat===s.lat?"#16a34a":"#1E2D40"}`, borderRadius:9, padding:"8px 12px", color:from.coord?.lat===s.lat?"#4ade80":"#9CA3AF", fontSize:12, cursor:"pointer", textAlign:"left" }}>
+                <span style={{ fontWeight:700, fontFamily:"DM Mono", marginRight:8 }}>{s.code}</span>{s.name}
+                <span style={{ color:"#374151", fontSize:10, marginLeft:6 }}>{Math.round(s.d)}m</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <BusStopField label="To"   value={to.value}   onChange={v => resolveInput(v, stopMap, "to",   setTo,   setToNearby)}   status={to.status}   name={to.name}   />
+      {toNearby.length > 0 && !to.picked && (
+        <div style={{ marginTop:-6, marginBottom:10 }}>
+          <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your stop:</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            {toNearby.map(s => (
+              <button key={s.code} onClick={() => { setTo(prev => ({ ...prev, coord:{ lat:s.lat, lng:s.lng }, name:s.name, picked:true })); setToNearby([]); }}
+                style={{ background:to.coord?.lat===s.lat?"#0a2a1a":"#161B27", border:`1px solid ${to.coord?.lat===s.lat?"#16a34a":"#1E2D40"}`, borderRadius:9, padding:"8px 12px", color:to.coord?.lat===s.lat?"#4ade80":"#9CA3AF", fontSize:12, cursor:"pointer", textAlign:"left" }}>
+                <span style={{ fontWeight:700, fontFamily:"DM Mono", marginRight:8 }}>{s.code}</span>{s.name}
+                <span style={{ color:"#374151", fontSize:10, marginLeft:6 }}>{Math.round(s.d)}m</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <button disabled={!canSearch||loading} onClick={findRoutes}
         style={{ width:"100%", padding:"13px", borderRadius:12, border:"none", background:canSearch&&!loading?"#2563EB":"#1E2D40", color:canSearch&&!loading?"#fff":"#374151", fontSize:14, fontWeight:800, cursor:canSearch&&!loading?"pointer":"not-allowed" }}>
