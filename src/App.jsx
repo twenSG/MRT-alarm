@@ -485,7 +485,7 @@ function StationPicker({ label, value, onChange, extra }) {
     <div style={{ marginBottom:12, position:"relative" }}>
       <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:6 }}>{label}</div>
       <button onClick={() => { setOpen(true); setTimeout(() => inputRef.current?.focus(), 50); }}
-        style={{ width:"100%", background:"#161B27", borderRadius:14, border:`1.5px solid ${value?"#009645":"#1E2D40"}`, padding:"14px 16px", display:"flex", alignItems:"center", gap:10, cursor:"pointer", textAlign:"left", transition:"border-color .2s" }}>
+        style={{ width:"100%", background:"#161B27", borderRadius:14, border:`1.5px solid ${value?"#009645":"#1E2D40"}`, padding:"14px 16px", display:"flex", alignItems:"center", gap:10, cursor:"pointer", textAlign:"left", transition:"border-color .2s", boxSizing:"border-box", font:"inherit" }}>
         <span style={{ fontSize:16 }}>{value?"✅":"🚉"}</span>
         {value ? (
           <div style={{ flex:1 }}>
