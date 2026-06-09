@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import BUS_STOPS from "./busStops.js";
 
 // ─── MRT STATION DATABASE ────────────────────────────────────────────────────
 const STATIONS = [
@@ -561,10 +562,12 @@ function BusInputPanel({ onTrack }) {
   const [confirm, setConfirm] = useState(null); // { route, boardStop, alightStop, nearbyBoard, nearbyAlight }
   const [selectedIdx, setSelectedIdx] = useState(null);
 
-  // Load stop map once
+  // Bus stops are embedded statically — no API call needed
   useEffect(() => {
-    setLoadingStops(true);
-    fetch("/api/bus-stops").then(r => r.json()).then(d => { setStopMap(d); setLoadingStops(false); }).catch(() => setLoadingStops(false));
+    if (Object.keys(BUS_STOPS).length > 0) {
+      setStopMap(BUS_STOPS);
+    }
+    setLoadingStops(false);
   }, []);
 
   function resolveInput(val, stopMap, side, setter) {
