@@ -637,20 +637,21 @@ function BusInputPanel({ onTrack }) {
         const BUS_MIN = 3;
         const NEARBY_M = 400; // for postal code mode — find stops near the coord
 
-        // Always search all nearby stops around the coord (400m radius)
-        // This ensures both sides of the road are included even if user picked one
+        // Always search all nearby stops regardless of input method
+        // People don't know which side of the road a stop code is on
         const getStopCodes = (field) => {
-          if (field.value.length === 5 && !field.coord) {
-            return [field.value]; // raw stop code with no coord — use directly
-          }
-          // Use coord (from postal or picked stop) to find all nearby stops
           const lat = field.coord.lat, lng = field.coord.lng;
-          return Object.entries(BUS_STOPS)
+          const nearby = Object.entries(BUS_STOPS)
             .map(([code, v]) => ({ code, d: haversineM(lat, lng, v[0], v[1]) }))
             .filter(s => s.d <= NEARBY_M)
             .sort((a, b) => a.d - b.d)
             .slice(0, 10)
             .map(s => s.code);
+          // Always include the entered stop code itself in case it's just outside radius
+          if (field.value.length === 5 && BUS_STOPS[field.value] && !nearby.includes(field.value)) {
+            nearby.push(field.value);
+          }
+          return nearby;
         };
 
         const originCodes = new Set(getStopCodes(from));
