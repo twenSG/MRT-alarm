@@ -497,16 +497,18 @@ function StationPicker({ label, value, onChange, extra }) {
       <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:6 }}>{label}</div>
       <div style={{ background:"#161B27", borderRadius:showSuggestions?`14px 14px 0 0`:14, border:`1.5px solid ${value?"#009645":focused?"#60A5FA":"#1E2D40"}`, padding:"14px 16px", display:"flex", alignItems:"center", gap:10, transition:"border-color .2s", boxSizing:"border-box" }}>
         <span style={{ fontSize:16 }}>{value?"✅":"🚉"}</span>
-        <input
-          ref={inputRef}
-          placeholder={value ? value.name : "Type a station name…"}
-          value={query}
-          onChange={e => { setQuery(e.target.value); if (value) onChange(null); }}
-          onFocus={() => setFocused(true)}
-          onBlur={handleBlur}
-          style={{ flex:1, background:"transparent", border:"none", color:value&&!query?"#fff":"#fff", fontSize:15, fontWeight:value&&!query?700:400, padding:0, fontFamily:"inherit", outline:"none" }}
-        />
-        {value && !query && <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{value.lines.filter(l => LINE_META[l]).map(l => <LinePill key={l} line={l} small />)}</div>}
+        <div style={{ flex:1, display:"flex", flexDirection:"column", gap:3 }}>
+          <input
+            ref={inputRef}
+            placeholder={value && !query ? value.name : "Type a station name…"}
+            value={query}
+            onChange={e => { setQuery(e.target.value); if (value) onChange(null); }}
+            onFocus={() => setFocused(true)}
+            onBlur={handleBlur}
+            style={{ background:"transparent", border:"none", color:"#fff", fontSize:15, fontWeight:value&&!query?700:400, padding:0, fontFamily:"inherit", outline:"none", width:"100%" }}
+          />
+          {value && !query && <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{value.lines.filter(l => LINE_META[l]).map(l => <LinePill key={l} line={l} small />)}</div>}
+        </div>
         {query && <button onMouseDown={e => e.preventDefault()} onClick={() => { setQuery(""); onChange(null); inputRef.current?.focus(); }} style={{ background:"none", border:"none", color:"#374151", cursor:"pointer", fontSize:14, padding:0, flexShrink:0 }}>✕</button>}
         {extra && <div>{extra}</div>}
       </div>
@@ -536,8 +538,8 @@ function NearMeButton({ onFound, style }) {
       navigator.geolocation.getCurrentPosition(pos => {
         onFound({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       }, null, { enableHighAccuracy: true, timeout: 8000 });
-    }} style={{ background:"#1E2D40", border:"1px solid #2D3F55", borderRadius:8, color:"#60A5FA", fontSize:11, fontWeight:700, padding:"5px 10px", cursor:"pointer", ...style }}>
-      📍 Near me
+    }} style={{ background:"#1E2D40", border:"1px solid #2D3F55", borderRadius:8, color:"#60A5FA", fontSize:10, fontWeight:700, padding:"0 8px", height:24, cursor:"pointer", flexShrink:0, whiteSpace:"nowrap", lineHeight:"24px", ...style }}>
+      📍
     </button>
   );
 }
@@ -1335,7 +1337,7 @@ export default function App() {
           setNearMeDebug(`GPS: ${lat.toFixed(4)},${lng.toFixed(4)} → ${s?.name ?? "none"} (${s ? Math.round(haversineM(lat,lng,s.lat,s.lng)) : "?"}m)`);
           if (s) onFound(s);
         }, null, { enableHighAccuracy:true, timeout:8000 });
-      }} style={{ background:"#1E2D40", border:"1px solid #2D3F55", borderRadius:8, color:"#60A5FA", fontSize:11, fontWeight:700, padding:"5px 10px", cursor:"pointer", ...style }}>
+      }} style={{ background:"#1E2D40", border:"1px solid #2D3F55", borderRadius:8, color:"#60A5FA", fontSize:11, fontWeight:700, padding:"0 8px", height:24, cursor:"pointer", flexShrink:0, whiteSpace:"nowrap", lineHeight:"24px", ...style }}>
         📍 Near me
       </button>
     );
