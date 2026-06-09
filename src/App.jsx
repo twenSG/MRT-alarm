@@ -864,74 +864,61 @@ function BusInputPanel({ onTrack }) {
 
 // ─── MIXED ROUTING ───────────────────────────────────────────────────────────
 function computeMixedRoutes(oLat, oLng, dLat, dLng) {
-  const BUS_STOPS_MAP = BUS_STOPS; 
-  const BUS_ROUTES_LIST = Object.entries(BUS_ROUTES);
-  
-  // Scoring parameters
-  const WALKING_SPEED = 80; // meters per min
-  const MRT_MIN = 2;
-  const BUS_MIN = 3;
-  const TRANSFER_PENALTY = 5;
-
   const results = [];
+  const BUS_MIN = 3;
+  const MRT_MIN = 2;
 
-  // 1. Identify nearby entry points
-  const nearBusFrom = Object.entries(BUS_STOPS_MAP)
-    .map(([code, v]) => ({ code, lat: v[0], lng: v[1], name: v[2], d: haversineM(oLat, oLng, v[0], v[1]) }))
-    .filter(s => s.d <= 600);
-  
-  const nearBusTo = Object.entries(BUS_STOPS_MAP)
-    .map(([code, v]) => ({ code, lat: v[0], lng: v[1], name: v[2], d: haversineM(dLat, dLng, v[0], v[1]) }))
-    .filter(s => s.d <= 600);
+  // 1. Bus Search
+  const nearBusFrom = Object.entries(BUS_STOPS).map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(oLat, oLng, v[0], v[1]) })).filter(s => s.d <= 600);
+  const nearBusTo = Object.entries(BUS_STOPS).map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(dLat, dLng, v[0], v[1]) })).filter(s => s.d <= 600);
 
-  // 2. Simple Bus-to-Bus Search (covers Bus-Bus-Bus scenarios)
   for (const start of nearBusFrom) {
     for (const end of nearBusTo) {
-      for (const [key, stops] of BUS_ROUTES_LIST) {
+      for (const [key, stops] of Object.entries(BUS_ROUTES)) {
         const oIdx = stops.indexOf(start.code);
         const dIdx = stops.indexOf(end.code);
-        
         if (oIdx !== -1 && dIdx !== -1 && dIdx > oIdx) {
           const serviceNo = key.split("_")[0];
-          const stopCount = dIdx - oIdx;
-          
+          const legStops = stops.slice(oIdx, dIdx + 1).map(c => ({code:c, name:BUS_STOPS[c]?.[2]||c}));
           results.push({
             type: "bus",
-            label: `Bus ${serviceNo}: ${start.name} → ${end.name}`,
-            estMins: (stopCount * BUS_MIN) + (start.d / WALKING_SPEED) + (end.d / WALKING_SPEED),
-            transfers: 0,
-            legs: [{ line: "BUS", serviceNo, stops: stops.slice(oIdx, dIdx + 1).map(c => ({code:c, name:BUS_STOPS_MAP[c]?.[2]})) }],
+            isBus: true,
+            serviceNo: serviceNo,
             fromName: start.name,
             toName: end.name,
-            stopCount
+            stopCount: dIdx - oIdx,
+            estMins: (dIdx - oIdx) * BUS_MIN,
+            legs: [{ line: "BUS", serviceNo, stops: legStops }],
+            alerts: [{ id: "alight-bus", type: "alight", stopCode: end.code, stopName: end.name, lat: end.lat, lng: end.lng }]
           });
         }
       }
     }
   }
 
-  // 3. MRT Pathing
+  // 2. MRT Search
   const startSt = UNIQUE_STATIONS.map(s => ({...s, d: haversineM(oLat, oLng, s.lat, s.lng)})).sort((a,b) => a.d-b.d)[0];
   const endSt = UNIQUE_STATIONS.map(s => ({...s, d: haversineM(dLat, dLng, s.lat, s.lng)})).sort((a,b) => a.d-b.d)[0];
   
   if (startSt && endSt) {
     const path = findPathFewestTransfers(startSt.name, endSt.name) || findPath(startSt.name, endSt.name);
     if (path) {
+      const legs = pathToLegs(path);
       results.push({
         type: "mrt",
-        label: `MRT: ${startSt.name} → ${endSt.name}`,
-        estMins: (path.length * MRT_MIN) + (startSt.d / WALKING_SPEED) + (endSt.d / WALKING_SPEED),
-        transfers: 0,
-        legs: pathToLegs(path),
+        isBus: false,
         fromName: startSt.name,
         toName: endSt.name,
-        stopCount: path.length
+        stopCount: path.length - 1,
+        estMins: (path.length - 1) * MRT_MIN,
+        legs: legs,
+        alerts: buildAlerts(legs)
       });
     }
   }
 
-  // Sort by efficiency
-  return results.sort((a, b) => a.estMins - b.estMins).slice(0, 5);
+  // Filter out any duplicates and return the cleanest 4 options
+  return results.sort((a, b) => a.estMins - b.estMins).slice(0, 4);
 }
 
 function NearbyStopPicker({ stops, selectedCoord, onPick }) {
