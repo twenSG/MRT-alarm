@@ -860,282 +860,313 @@ function BusInputPanel({ onTrack }) {
 }
 
 
-// ─── MIXED ROUTING ───────────────────────────────────────────────────────────
-function computeMixedRoutes(oLat, oLng, dLat, dLng) {
-  const BUS_MIN = 3, MRT_MIN = 2, TRANSFER_PENALTY = 5;
-  const results = [];
+// ─── JOURNEY BUILDER (Mixed tab) ─────────────────────────────────────────────
+// Step-by-step: pick stop → pick service → pick destination/transfer → repeat
+
+function servicesAtStop(stopCode) {
+  // Bus services that stop here
+  const buses = [];
   const seen = new Set();
-
-  function stopData(code) { const v = BUS_STOPS[code]; return v ? { code, lat:v[0], lng:v[1], name:v[2] } : null; }
-
-  function buildLeg(stops, fromIdx, toIdx) {
-    return stops.slice(fromIdx, toIdx+1).map(c => { const v = BUS_STOPS[c]; return v ? { code:c, lat:v[0], lng:v[1], name:v[2] } : { code:c, lat:0, lng:0, name:c }; });
-  }
-
-  function makeAlerts(legs) {
-    return legs.map((leg, i) => {
-      const last = leg.stops[leg.stops.length-1];
-      const isLast = i === legs.length-1;
-      if (isLast) return { id:`alight-${last.code}`, type:"alight", stopCode:last.code, stopName:last.name, radiusM:400, message:"Alight now!", detail:`${last.name}`, color:"#009645", vibratePattern:[300,100,300,100,600], lat:last.lat, lng:last.lng };
-      const next = legs[i+1];
-      const label = next.line === "BUS" ? `Bus ${next.serviceNo}` : (LINE_META[next.line]?.label || next.line);
-      return { id:`xfer-${i}-${last.code}`, type:"transfer", stopCode:last.code, stopName:last.name, radiusM:400, message:"Get ready to transfer", detail:`Board ${label} at ${last.name}`, color:"#F59E0B", vibratePattern:[200,100,200], lat:last.lat, lng:last.lng };
-    });
-  }
-
-  function addResult(r) {
-    const k = r.legs.map(l => (l.serviceNo||l.line)+l.stops[0].code+l.stops[l.stops.length-1].code).join("|");
-    if (!seen.has(k)) { seen.add(k); results.push(r); }
-  }
-
-  // Find best direct bus from origin stops to a set of dest codes
-  function findDirectBusLeg(originCodes, destCodes, dLat, dLng) {
-    const found = [];
-    for (const [key, stops] of Object.entries(BUS_ROUTES)) {
-      const svc = key.split("_")[0];
-      let oIdx = -1; const cands = [];
-      for (let i = 0; i < stops.length; i++) {
-        if (originCodes.has(stops[i]) && oIdx === -1) oIdx = i;
-        if (oIdx !== -1 && i > oIdx && destCodes.has(stops[i])) {
-          const v = BUS_STOPS[stops[i]]; if (v) cands.push({ i, code:stops[i], lat:v[0], lng:v[1], name:v[2], d:haversineM(dLat,dLng,v[0],v[1]) });
-        }
-      }
-      if (oIdx === -1 || !cands.length) continue;
-      const best = cands.sort((a,b) => a.d-b.d)[0];
-      const fv = BUS_STOPS[stops[oIdx]]; if (!fv) continue;
-      found.push({ svc, oIdx, destIdx:best.i, from:{ code:stops[oIdx], lat:fv[0], lng:fv[1], name:fv[2] }, to:best, stops, stopCount:best.i-oIdx });
-    }
-    return found.sort((a,b) => a.stopCount-b.stopCount).slice(0,3);
-  }
-
-  // Nearby stops
-  const nearOStops = Object.entries(BUS_STOPS).map(([c,v]) => ({ code:c, lat:v[0], lng:v[1], d:haversineM(oLat,oLng,v[0],v[1]) })).filter(s=>s.d<=600).sort((a,b)=>a.d-b.d).slice(0,10);
-  const nearDStops = Object.entries(BUS_STOPS).map(([c,v]) => ({ code:c, lat:v[0], lng:v[1], d:haversineM(dLat,dLng,v[0],v[1]) })).filter(s=>s.d<=300).sort((a,b)=>a.d-b.d).slice(0,10);
-  const oCodes = new Set(nearOStops.map(s=>s.code));
-  const dCodes = new Set(nearDStops.map(s=>s.code));
-
-  // Nearby MRT stations
-  const oStations = UNIQUE_STATIONS.map(s=>({...s,d:haversineM(oLat,oLng,s.lat,s.lng)})).filter(s=>s.d<=800).sort((a,b)=>a.d-b.d).slice(0,3);
-  const dStations = UNIQUE_STATIONS.map(s=>({...s,d:haversineM(dLat,dLng,s.lat,s.lng)})).filter(s=>s.d<=800).sort((a,b)=>a.d-b.d).slice(0,3);
-
-  // 1. Pure MRT
-  for (const os of oStations.slice(0,2)) for (const ds of dStations.slice(0,2)) {
-    if (os.name===ds.name) continue;
-    const path = findPathFewestTransfers(os.name,ds.name)||findPath(os.name,ds.name); if (!path) continue;
-    const legs = pathToLegs(path); if (!legs.length) continue;
-    const sc = [...new Set(path.map(c=>STATIONS.find(s=>s.code===c)?.name))].length-1;
-    addResult({ type:"mrt", label:`🚇 MRT only`, legs, alerts:buildAlerts(legs), stopCount:sc, transfers:legs.length-1, estMins:sc*MRT_MIN+(legs.length-1)*TRANSFER_PENALTY, fromName:os.name, toName:ds.name });
-  }
-
-  // 2. Direct bus
-  const directBuses = findDirectBusLeg(oCodes, dCodes, dLat, dLng);
-  for (const b of directBuses) {
-    const legs = [{ line:"BUS", serviceNo:b.svc, stops:buildLeg(b.stops,b.oIdx,b.destIdx) }];
-    addResult({ type:"bus", label:`🚌 Bus ${b.svc}`, legs, alerts:makeAlerts(legs), stopCount:b.stopCount, transfers:0, estMins:b.stopCount*BUS_MIN, fromName:b.from.name, toName:b.to.name });
-  }
-
-  // 3. Bus → MRT → (walk to dest)
-  for (const ds of dStations.slice(0,2)) {
-    const dsStops = Object.entries(BUS_STOPS).map(([c,v])=>({code:c,d:haversineM(ds.lat,ds.lng,v[0],v[1])})).filter(s=>s.d<=500);
-    const dsCodes = new Set(dsStops.map(s=>s.code));
-    const buses = findDirectBusLeg(oCodes, dsCodes, ds.lat, ds.lng);
-    for (const b of buses.slice(0,2)) {
-      for (const finalDs of dStations.slice(0,2)) {
-        if (ds.name===finalDs.name) continue;
-        const path = findPathFewestTransfers(ds.name,finalDs.name)||findPath(ds.name,finalDs.name); if (!path) continue;
-        const mrtLegs = pathToLegs(path); if (!mrtLegs.length) continue;
-        const busStops = buildLeg(b.stops,b.oIdx,b.destIdx);
-        const legs = [{ line:"BUS", serviceNo:b.svc, stops:busStops }, ...mrtLegs];
-        const sc = b.stopCount + [...new Set(path.map(c=>STATIONS.find(s=>s.code===c)?.name))].length-1;
-        addResult({ type:"bus+mrt", label:`🚌 Bus ${b.svc} → 🚇 MRT`, legs, alerts:makeAlerts(legs), stopCount:sc, transfers:1+mrtLegs.length-1, estMins:sc*BUS_MIN+TRANSFER_PENALTY, fromName:b.from.name, toName:finalDs.name });
-      }
+  for (const [key, stops] of Object.entries(BUS_ROUTES)) {
+    const svc = key.split("_")[0];
+    if (stops.includes(stopCode) && !seen.has(svc)) {
+      seen.add(svc);
+      buses.push({ type:"bus", id:svc, label:`Bus ${svc}`, color:"#F59E0B" });
     }
   }
-
-  // 4. MRT → Bus
-  for (const os of oStations.slice(0,2)) {
-    for (const ds of dStations.slice(0,2)) {
-      if (os.name===ds.name) continue;
-      const path = findPathFewestTransfers(os.name,ds.name)||findPath(os.name,ds.name); if (!path) continue;
-      const mrtLegs = pathToLegs(path); if (!mrtLegs.length) continue;
-      const dsStops = Object.entries(BUS_STOPS).map(([c,v])=>({code:c,d:haversineM(ds.lat,ds.lng,v[0],v[1])})).filter(s=>s.d<=500);
-      const dsBoardCodes = new Set(dsStops.map(s=>s.code));
-      const buses = findDirectBusLeg(dsBoardCodes, dCodes, dLat, dLng);
-      for (const b of buses.slice(0,2)) {
-        const busStops = buildLeg(b.stops,b.oIdx,b.destIdx);
-        const legs = [...mrtLegs, { line:"BUS", serviceNo:b.svc, stops:busStops }];
-        const sc = [...new Set(path.map(c=>STATIONS.find(s=>s.code===c)?.name))].length-1 + b.stopCount;
-        addResult({ type:"mrt+bus", label:`🚇 MRT → 🚌 Bus ${b.svc}`, legs, alerts:makeAlerts(legs), stopCount:sc, transfers:mrtLegs.length, estMins:sc*MRT_MIN+TRANSFER_PENALTY, fromName:os.name, toName:b.to.name });
-      }
-    }
-  }
-
-  // 5. Bus → MRT → Bus
-  for (const os of oStations.slice(0,2)) {
-    const osStops = Object.entries(BUS_STOPS).map(([c,v])=>({code:c,d:haversineM(os.lat,os.lng,v[0],v[1])})).filter(s=>s.d<=500);
-    const osBoardCodes = new Set(osStops.map(s=>s.code));
-    const bus1List = findDirectBusLeg(oCodes, osBoardCodes, os.lat, os.lng);
-    for (const b1 of bus1List.slice(0,2)) {
-      for (const ds of dStations.slice(0,2)) {
-        if (os.name===ds.name) continue;
-        const path = findPathFewestTransfers(os.name,ds.name)||findPath(os.name,ds.name); if (!path) continue;
-        const mrtLegs = pathToLegs(path); if (!mrtLegs.length) continue;
-        const dsStops = Object.entries(BUS_STOPS).map(([c,v])=>({code:c,d:haversineM(ds.lat,ds.lng,v[0],v[1])})).filter(s=>s.d<=500);
-        const dsBoardCodes = new Set(dsStops.map(s=>s.code));
-        const bus2List = findDirectBusLeg(dsBoardCodes, dCodes, dLat, dLng);
-        for (const b2 of bus2List.slice(0,1)) {
-          const bus1Stops = buildLeg(b1.stops,b1.oIdx,b1.destIdx);
-          const bus2Stops = buildLeg(b2.stops,b2.oIdx,b2.destIdx);
-          const legs = [{ line:"BUS", serviceNo:b1.svc, stops:bus1Stops }, ...mrtLegs, { line:"BUS", serviceNo:b2.svc, stops:bus2Stops }];
-          const sc = b1.stopCount + [...new Set(path.map(c=>STATIONS.find(s=>s.code===c)?.name))].length-1 + b2.stopCount;
-          addResult({ type:"bus+mrt+bus", label:`🚌 Bus ${b1.svc} → 🚇 MRT → 🚌 Bus ${b2.svc}`, legs, alerts:makeAlerts(legs), stopCount:sc, transfers:2+mrtLegs.length-1, estMins:sc*BUS_MIN+2*TRANSFER_PENALTY, fromName:b1.from.name, toName:b2.to.name });
-        }
-      }
-    }
-  }
-
-  return results.sort((a,b) => a.transfers-b.transfers||a.estMins-b.estMins).slice(0,5);
+  buses.sort((a,b) => a.id.localeCompare(b.id, undefined, { numeric:true }));
+  return buses;
 }
 
+function servicesAtStation(stationName) {
+  const station = UNIQUE_STATIONS.find(s => s.name === stationName);
+  if (!station) return [];
+  return (station.lines || [])
+    .filter(l => LINE_META[l])
+    .map(l => ({ type:"mrt", id:l, label:LINE_META[l].short + " Line", color:LINE_META[l].color, line:l, stationName }));
+}
 
-function NearbyStopPicker({ stops, selectedCoord, onPick }) {
-  if (!stops.length) return null;
-  return (
-    <div style={{ marginTop:-6, marginBottom:10 }}>
-      <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your stop:</div>
-      <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-        {stops.map(s => {
-          const active = selectedCoord?.lat === s.lat;
+function stopsForBus(serviceNo, fromStopCode) {
+  // Find the route direction where fromStopCode appears earliest
+  const candidates = [];
+  for (const [key, stops] of Object.entries(BUS_ROUTES)) {
+    if (key.split("_")[0] !== serviceNo) continue;
+    const idx = stops.indexOf(fromStopCode);
+    if (idx !== -1) candidates.push({ stops, idx });
+  }
+  if (!candidates.length) return [];
+  // Pick direction where stop appears and has the most stops remaining
+  candidates.sort((a,b) => (b.stops.length - b.idx) - (a.stops.length - a.idx));
+  const { stops, idx } = candidates[0];
+  return stops.slice(idx+1).map(c => {
+    const v = BUS_STOPS[c];
+    return v ? { code:c, lat:v[0], lng:v[1], name:v[2] } : null;
+  }).filter(Boolean);
+}
+
+function stationsForMRTLine(line, fromStationName) {
+  const seq = LINE_SEQUENCES[line]; if (!seq) return [];
+  const codes = seq.map(c => STATIONS.find(s => s.code === c)).filter(Boolean);
+  // Find from station index
+  const fromIdx = codes.findIndex(s => s.name === fromStationName);
+  if (fromIdx === -1) return codes.map(s => ({ code:s.code, name:s.name, lat:s.lat, lng:s.lng, isMRT:true, lines:s.lines }));
+  // Both directions
+  const forward  = codes.slice(fromIdx+1).map(s => ({ code:s.code, name:s.name, lat:s.lat, lng:s.lng, isMRT:true, lines:s.lines }));
+  const backward = codes.slice(0, fromIdx).reverse().map(s => ({ code:s.code, name:s.name, lat:s.lat, lng:s.lng, isMRT:true, lines:s.lines }));
+  // Deduplicate by name
+  const seen = new Set();
+  return [...forward, ...backward].filter(s => { if (seen.has(s.name)) return false; seen.add(s.name); return true; });
+}
+
+function buildJourneyRoute(legs) {
+  // Convert journey builder legs into the route format used by tracking screen
+  const trackLegs = legs.map(leg => {
+    if (leg.type === "bus") {
+      return { line:"BUS", serviceNo:leg.serviceNo, stops:leg.stops };
+    } else {
+      // MRT leg — build stop list from LINE_SEQUENCES
+      const fromName = leg.fromStation, toName = leg.toStation;
+      const path = findPathFewestTransfers(fromName, toName) || findPath(fromName, toName);
+      if (!path) return null;
+      const pathLegs = pathToLegs(path);
+      return pathLegs; // array of legs
+    }
+  }).flat().filter(Boolean);
+
+  if (!trackLegs.length) return null;
+  const alerts = buildAlerts(trackLegs);
+  const fromName = trackLegs[0].stops[0].name;
+  const lastLeg  = trackLegs[trackLegs.length-1];
+  const toName   = lastLeg.stops[lastLeg.stops.length-1].name;
+  const totalStops = trackLegs.reduce((sum, l) => sum + l.stops.length - 1, 0);
+
+  return { legs:trackLegs, alerts, stopCount:totalStops, transfers:trackLegs.length-1, fromName, toName };
+}
+
+function JourneyBuilder({ onTrack }) {
+  // Each leg: { type:"bus"|"mrt", serviceNo/line, fromStop/fromStation, stops, toStop }
+  const [legs, setLegs] = useState([]); // completed legs
+  const [step, setStep] = useState("origin"); // origin | service | destination
+  const [originStop, setOriginStop] = useState(null); // { code, name, lat, lng } or { isMRT, name, ... }
+  const [currentStop, setCurrentStop] = useState(null); // current position after last leg
+  const [selectedService, setSelectedService] = useState(null);
+  const [stopFilter, setStopFilter] = useState("");
+  const [originInput, setOriginInput] = useState("");
+  const [originStatus, setOriginStatus] = useState("idle");
+  const [nearbyOrigin, setNearbyOrigin] = useState([]);
+  const debounce = useRef(null);
+
+  function reset() {
+    setLegs([]); setStep("origin"); setOriginStop(null); setCurrentStop(null);
+    setSelectedService(null); setStopFilter(""); setOriginInput(""); setOriginStatus("idle"); setNearbyOrigin([]);
+  }
+
+  function resolveOrigin(val) {
+    const clean = val.replace(/\D/g,"").slice(0,6);
+    setOriginInput(clean);
+    if (clean.length === 5 && BUS_STOPS[clean]) {
+      const v = BUS_STOPS[clean];
+      const stop = { code:clean, lat:v[0], lng:v[1], name:v[2] };
+      setOriginStop(stop); setCurrentStop(stop); setStep("service"); setOriginStatus("ok");
+    } else if (clean.length === 6) {
+      setOriginStatus("loading");
+      clearTimeout(debounce.current);
+      debounce.current = setTimeout(async () => {
+        try {
+          const r = await geocodePostal(clean);
+          const nearby = Object.entries(BUS_STOPS)
+            .map(([code,v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(r.lat,r.lng,v[0],v[1]) }))
+            .filter(s => s.d <= 400).sort((a,b) => a.d-b.d).slice(0,3);
+          // Also check for nearby MRT stations
+          const nearStations = UNIQUE_STATIONS
+            .map(s => ({ ...s, d:haversineM(r.lat,r.lng,s.lat,s.lng) }))
+            .filter(s => s.d <= 400).sort((a,b) => a.d-b.d).slice(0,2)
+            .map(s => ({ isMRT:true, name:s.name, lat:s.lat, lng:s.lng, lines:s.lines, d:s.d }));
+          setNearbyOrigin([...nearby, ...nearStations].sort((a,b) => a.d-b.d));
+          setOriginStatus("ok");
+        } catch { setOriginStatus("error"); }
+      }, 600);
+    } else {
+      setOriginStatus("idle"); setNearbyOrigin([]);
+    }
+  }
+
+  function pickOrigin(stop) {
+    setOriginStop(stop); setCurrentStop(stop); setStep("service");
+    setNearbyOrigin([]); setOriginInput(stop.code || stop.name);
+  }
+
+  function pickService(svc) {
+    setSelectedService(svc); setStep("destination"); setStopFilter("");
+  }
+
+  function pickDestination(stop, isTransfer) {
+    // Build the leg
+    let newLeg;
+    if (selectedService.type === "bus") {
+      const allStops = stopsForBus(selectedService.id, currentStop.code);
+      const toIdx = allStops.findIndex(s => s.code === stop.code);
+      const legStops = [currentStop, ...allStops.slice(0, toIdx+1)];
+      newLeg = { type:"bus", serviceNo:selectedService.id, stops:legStops };
+    } else {
+      // MRT leg — store as fromStation/toStation, expand at track time
+      newLeg = { type:"mrt", line:selectedService.line, fromStation:currentStop.name, toStation:stop.name,
+        stops:[currentStop, stop] }; // simplified for display
+    }
+    const newLegs = [...legs, newLeg];
+    setLegs(newLegs);
+
+    if (isTransfer) {
+      setCurrentStop(stop); setSelectedService(null); setStep("service"); setStopFilter("");
+    } else {
+      // Journey complete — build route and track
+      const route = buildJourneyRoute(newLegs);
+      if (route) onTrack(route);
+    }
+  }
+
+  // ── Services at current position
+  const busServices = currentStop && !currentStop.isMRT ? servicesAtStop(currentStop.code) : [];
+  const mrtServices = currentStop ? (() => {
+    const nearby = UNIQUE_STATIONS.map(s => ({ ...s, d:haversineM(currentStop.lat, currentStop.lng, s.lat, s.lng) })).filter(s => s.d <= 300).sort((a,b) => a.d-b.d);
+    if (!nearby.length) return [];
+    return servicesAtStation(nearby[0].name);
+  })() : currentStop?.isMRT ? servicesAtStation(currentStop.name) : [];
+  const allServices = [...busServices, ...mrtServices];
+
+  // ── Stops for selected service
+  const serviceStops = selectedService ? (
+    selectedService.type === "bus"
+      ? stopsForBus(selectedService.id, currentStop.code)
+      : stationsForMRTLine(selectedService.line, currentStop.name)
+  ) : [];
+  const filteredStops = serviceStops.filter(s => s.name.toLowerCase().includes(stopFilter.toLowerCase())).slice(0, 50);
+
+  const pillStyle = (color, active) => ({
+    background:active?color:"#161B27", border:`1px solid ${active?color:"#1E2D40"}`, borderRadius:10,
+    padding:"8px 14px", color:active?"#fff":"#9CA3AF", fontSize:13, fontWeight:700, cursor:"pointer", textAlign:"left",
+    display:"flex", alignItems:"center", justifyContent:"space-between", gap:8,
+  });
+
+  // ── Journey summary at top
+  function JourneySummary() {
+    if (!legs.length) return null;
+    return (
+      <div style={{ background:"#0D1117", borderRadius:12, padding:"10px 14px", marginBottom:12, border:"1px solid #1E2D40" }}>
+        <div style={{ color:"#374151", fontSize:10, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:6 }}>Journey so far</div>
+        {legs.map((leg, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+            <span style={{ background:leg.type==="bus"?"#F59E0B":LINE_META[leg.line]?.color||"#666", color:"#fff", fontSize:9, fontWeight:800, borderRadius:4, padding:"1px 6px", flexShrink:0 }}>
+              {leg.type==="bus" ? leg.serviceNo : LINE_META[leg.line]?.short}
+            </span>
+            <span style={{ color:"#6B7280", fontSize:11 }}>
+              {leg.stops[0].name} → {leg.stops[leg.stops.length-1].name}
+            </span>
+          </div>
+        ))}
+        <button onClick={() => { setLegs(legs.slice(0,-1)); setCurrentStop(legs.length > 1 ? legs[legs.length-2].stops[legs[legs.length-2].stops.length-1] : originStop); setStep("service"); setSelectedService(null); }}
+          style={{ background:"none", border:"none", color:"#EF4444", fontSize:10, cursor:"pointer", padding:0, marginTop:4 }}>
+          ✕ Remove last leg
+        </button>
+      </div>
+    );
+  }
+
+  // ── STEP: Origin ──────────────────────────────────────────────────────────
+  if (step === "origin") return (
+    <div>
+      <div style={{ color:"#374151", fontSize:12, marginBottom:10 }}>Enter your starting stop code or postal code</div>
+      <BusStopField label="Starting from" value={originInput} onChange={resolveOrigin} status={originStatus} name={originStop?.name}
+        extra={<NearMeButton onFound={pos => {
+          const nearby = Object.entries(BUS_STOPS)
+            .map(([c,v]) => ({ code:c, lat:v[0], lng:v[1], name:v[2], d:haversineM(pos.lat,pos.lng,v[0],v[1]) }))
+            .filter(s => s.d <= 400).sort((a,b) => a.d-b.d).slice(0,3);
+          const nearStations = UNIQUE_STATIONS.map(s => ({ ...s, isMRT:true, d:haversineM(pos.lat,pos.lng,s.lat,s.lng) })).filter(s => s.d <= 300).sort((a,b) => a.d-b.d).slice(0,2);
+          setNearbyOrigin([...nearby, ...nearStations].sort((a,b) => a.d-b.d));
+          if (nearby[0]) setOriginStatus("ok");
+        }} />}
+      />
+      {nearbyOrigin.length > 0 && (
+        <div style={{ marginTop:-6, marginBottom:10 }}>
+          <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your starting point:</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            {nearbyOrigin.map(s => (
+              <button key={s.code||s.name} onClick={() => pickOrigin(s)}
+                style={{ background:"#161B27", border:"1px solid #1E2D40", borderRadius:9, padding:"8px 12px", color:"#9CA3AF", fontSize:12, cursor:"pointer", textAlign:"left", display:"flex", alignItems:"center", gap:8 }}>
+                {s.isMRT
+                  ? <><span style={{ background:LINE_META[s.lines?.[0]]?.color||"#666", color:"#fff", fontSize:9, fontWeight:800, borderRadius:4, padding:"1px 6px" }}>{s.lines?.map(l=>LINE_META[l]?.short).filter(Boolean).join(" ")}</span>{s.name}</>
+                  : <><span style={{ fontWeight:700, fontFamily:"DM Mono" }}>{s.code}</span>{s.name}</>
+                }
+                <span style={{ color:"#374151", fontSize:10, marginLeft:"auto" }}>{Math.round(s.d)}m</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // ── STEP: Pick service ────────────────────────────────────────────────────
+  if (step === "service") return (
+    <div>
+      <JourneySummary />
+      <div style={{ color:"#fff", fontSize:14, fontWeight:700, marginBottom:4 }}>At: <span style={{ color:"#60A5FA" }}>{currentStop?.name || currentStop?.code}</span></div>
+      <div style={{ color:"#374151", fontSize:12, marginBottom:12 }}>Which service are you taking?</div>
+      {allServices.length === 0 && <div style={{ color:"#EF4444", fontSize:12 }}>No services found at this stop.</div>}
+      <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+        {allServices.map(svc => (
+          <button key={svc.id} onClick={() => pickService(svc)}
+            style={{ background:"#161B27", border:`1px solid ${svc.color}33`, borderRadius:10, padding:"8px 14px", color:svc.color, fontSize:13, fontWeight:800, cursor:"pointer" }}>
+            {svc.label}
+          </button>
+        ))}
+      </div>
+      <button onClick={reset} style={{ marginTop:16, background:"none", border:"none", color:"#374151", fontSize:12, cursor:"pointer", padding:0 }}>← Start over</button>
+    </div>
+  );
+
+  // ── STEP: Pick destination/transfer ──────────────────────────────────────
+  if (step === "destination") return (
+    <div>
+      <JourneySummary />
+      <div style={{ color:"#fff", fontSize:14, fontWeight:700, marginBottom:2 }}>
+        {selectedService.type==="bus" ? `Bus ${selectedService.id}` : `${LINE_META[selectedService.line]?.label}`}
+      </div>
+      <div style={{ color:"#374151", fontSize:12, marginBottom:10 }}>Where are you going? Tap to alight, or transfer.</div>
+      <div style={{ background:"#161B27", borderRadius:12, border:"1px solid #1E2D40", padding:"8px 12px", marginBottom:10, display:"flex", alignItems:"center", gap:8 }}>
+        <span style={{ color:"#374151", fontSize:13 }}>🔍</span>
+        <input placeholder="Filter stops…" value={stopFilter} onChange={e => setStopFilter(e.target.value)}
+          style={{ flex:1, background:"transparent", border:"none", color:"#fff", fontSize:13, padding:"4px 0", fontFamily:"inherit", outline:"none" }} />
+      </div>
+      <div style={{ maxHeight:320, overflowY:"auto", display:"flex", flexDirection:"column", gap:4 }}>
+        {filteredStops.map(stop => {
+          const nearMRT = UNIQUE_STATIONS.filter(s => haversineM(stop.lat, stop.lng, s.lat, s.lng) <= 300);
+          const isInterchange = nearMRT.length > 0;
           return (
-            <button key={s.code} onClick={() => onPick(s)}
-              style={{ background:active?"#0a2a1a":"#161B27", border:`1px solid ${active?"#16a34a":"#1E2D40"}`, borderRadius:9, padding:"8px 12px", color:active?"#4ade80":"#9CA3AF", fontSize:12, cursor:"pointer", textAlign:"left" }}>
-              <span style={{ fontWeight:700, fontFamily:"DM Mono", marginRight:8 }}>{s.code}</span>{s.name}
-              <span style={{ color:"#374151", fontSize:10, marginLeft:6 }}>{Math.round(s.d)}m</span>
-            </button>
+            <div key={stop.code||stop.name} style={{ display:"flex", gap:4 }}>
+              <button onClick={() => pickDestination(stop, false)}
+                style={{ ...pillStyle("#009645", false), flex:1 }}>
+                <div>
+                  <span style={{ color:"#fff", fontSize:13, fontWeight:600 }}>{stop.name}</span>
+                  {!stop.isMRT && <span style={{ color:"#374151", fontSize:10, marginLeft:6 }}>{stop.code}</span>}
+                  {isInterchange && <span style={{ color:"#F59E0B", fontSize:10, marginLeft:6 }}>🔁 {nearMRT[0].name}</span>}
+                </div>
+                <span style={{ color:"#374151", fontSize:11 }}>↓ alight</span>
+              </button>
+              <button onClick={() => pickDestination(stop, true)}
+                style={{ background:"#1c1400", border:"1px solid #78350f", borderRadius:10, padding:"8px 10px", color:"#F59E0B", fontSize:11, fontWeight:700, cursor:"pointer", flexShrink:0 }}>
+                ⇄ xfer
+              </button>
+            </div>
           );
         })}
       </div>
+      <button onClick={() => { setStep("service"); setSelectedService(null); setStopFilter(""); }}
+        style={{ marginTop:12, background:"none", border:"none", color:"#374151", fontSize:12, cursor:"pointer", padding:0 }}>← Back to services</button>
     </div>
   );
-}
 
-function MixedInputPanel({ onTrack }) {
-  const [fromPostal, setFromPostal] = useState("");
-  const [toPostal,   setToPostal]   = useState("");
-  const [fromStatus, setFromStatus] = useState("idle");
-  const [toStatus,   setToStatus]   = useState("idle");
-  const [fromCoord,  setFromCoord]  = useState(null);
-  const [toCoord,    setToCoord]    = useState(null);
-  const [fromAddr,   setFromAddr]   = useState("");
-  const [toAddr,     setToAddr]     = useState("");
-  const [fromNearby, setFromNearby] = useState([]);
-  const [toNearby,   setToNearby]   = useState([]);
-  const [fromPicked, setFromPicked] = useState(false);
-  const [toPicked,   setToPicked]   = useState(false);
-  const [routes,     setRoutes]     = useState(null);
-  const [loading,    setLoading]    = useState(false);
-  const [selected,   setSelected]   = useState(null);
-  const debounce = useRef({});
-
-  function handlePostal(side, val) {
-    const v = val.replace(/\D/g, "").slice(0, 6);
-    if (side === "from") { setFromPostal(v); setFromCoord(null); setFromAddr(""); setFromNearby([]); setFromPicked(false); setFromStatus(v.length === 6 ? "loading" : "idle"); }
-    else                 { setToPostal(v);   setToCoord(null);   setToAddr("");   setToNearby([]);   setToPicked(false);   setToStatus(v.length === 6 ? "loading" : "idle"); }
-    if (v.length !== 6) return;
-    clearTimeout(debounce.current[side]);
-    debounce.current[side] = setTimeout(async () => {
-      try {
-        const r = await geocodePostal(v);
-        const nearby = Object.entries(BUS_STOPS)
-          .map(([code, sv]) => ({ code, lat:sv[0], lng:sv[1], name:sv[2], d:haversineM(r.lat, r.lng, sv[0], sv[1]) }))
-          .filter(s => s.d <= 600).sort((a,b) => a.d - b.d).slice(0, 3);
-        const nearest = nearby[0];
-        if (side === "from") {
-          setFromCoord(nearest ? { lat:nearest.lat, lng:nearest.lng } : { lat:r.lat, lng:r.lng });
-          setFromAddr(nearest ? nearest.name : r.address);
-          setFromNearby(nearby);
-          setFromPicked(false);
-          setFromStatus("ok");
-        } else {
-          setToCoord(nearest ? { lat:nearest.lat, lng:nearest.lng } : { lat:r.lat, lng:r.lng });
-          setToAddr(nearest ? nearest.name : r.address);
-          setToNearby(nearby);
-          setToPicked(false);
-          setToStatus("ok");
-        }
-      } catch {
-        if (side === "from") setFromStatus("error");
-        else setToStatus("error");
-      }
-    }, 600);
-  }
-
-  function search() {
-    if (!fromCoord || !toCoord) return;
-    setLoading(true); setRoutes(null); setSelected(null);
-    setTimeout(() => {
-      try {
-        const results = computeMixedRoutes(fromCoord.lat, fromCoord.lng, toCoord.lat, toCoord.lng);
-        setRoutes(results);
-      } catch(e) { console.error(e); setRoutes([]); }
-      setLoading(false);
-    }, 50);
-  }
-
-  const typeLabel = { mrt: "🚇 MRT", bus: "🚌 Bus", "bus+mrt": "🚌→🚇 Bus + MRT", "mrt+bus": "🚇→🚌 MRT + Bus" };
-  const typeColor = { mrt: "#D42E12", bus: "#F59E0B", "bus+mrt": "#9D5918", "mrt+bus": "#005EC4" };
-
-  return (
-    <>
-      <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from", v)} status={fromStatus} station={fromAddr ? { name: fromAddr } : null}
-        extra={<NearMeButton onFound={pos => {
-          const nearby = Object.entries(BUS_STOPS)
-            .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(pos.lat, pos.lng, v[0], v[1]) }))
-            .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 3);
-          setFromNearby(nearby);
-          setFromPicked(false);
-          if (nearby[0]) { setFromCoord({ lat:nearby[0].lat, lng:nearby[0].lng }); setFromAddr(nearby[0].name); setFromPostal(nearby[0].code); setFromStatus("ok"); }
-        }} />} />
-      {fromNearby.length > 0 && !fromPicked && (
-        <NearbyStopPicker stops={fromNearby} selectedCoord={fromCoord} onPick={s => { setFromCoord({ lat:s.lat, lng:s.lng }); setFromAddr(s.name); setFromPostal(s.code); setFromPicked(true); setFromNearby([]); }} />
-      )}
-      <PostalInput label="To (postal code)"   value={toPostal}   onChange={v => handlePostal("to",   v)} status={toStatus}   station={toAddr   ? { name: toAddr }   : null} />
-      {toNearby.length > 0 && !toPicked && (
-        <NearbyStopPicker stops={toNearby} selectedCoord={toCoord} onPick={s => { setToCoord({ lat:s.lat, lng:s.lng }); setToAddr(s.name); setToPostal(s.code); setToPicked(true); setToNearby([]); }} />
-      )}
-
-      <button disabled={!fromCoord || !toCoord || loading} onClick={search}
-        style={{ width:"100%", padding:"13px", borderRadius:12, border:"none", background:fromCoord&&toCoord&&!loading?"#2563EB":"#1E2D40", color:fromCoord&&toCoord&&!loading?"#fff":"#374151", fontSize:14, fontWeight:800, cursor:fromCoord&&toCoord&&!loading?"pointer":"not-allowed" }}>
-        {loading ? "Finding routes…" : "Find Best Routes"}
-      </button>
-
-      {routes && routes.length === 0 && (
-        <div style={{ color:"#EF4444", fontSize:12, marginTop:10, paddingLeft:4 }}>No routes found between these locations.</div>
-      )}
-
-      {routes && routes.length > 0 && (
-        <div style={{ marginTop:16 }}>
-          <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:8 }}>Routes found</div>
-          {routes.map((r, i) => (
-            <button key={i} onClick={() => setSelected(i)}
-              style={{ width:"100%", marginBottom:8, padding:"12px 14px", borderRadius:12, border:`1px solid ${selected===i?typeColor[r.type]:"#1E2D40"}`, background:selected===i?"#0a1628":"#0D1117", cursor:"pointer", textAlign:"left" }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                <span style={{ color:typeColor[r.type]||"#fff", fontSize:13, fontWeight:800 }}>{typeLabel[r.type]||r.type}</span>
-                <span style={{ color:"#6B7280", fontSize:11 }}>{r.transfers} transfer{r.transfers!==1?"s":""} · ~{r.estMins}min</span>
-              </div>
-              <div style={{ color:"#4B5563", fontSize:11, marginTop:3 }}>{r.label}</div>
-            </button>
-          ))}
-          {selected !== null && (
-            <button onClick={() => onTrack(routes[selected])}
-              style={{ width:"100%", padding:"14px", borderRadius:14, border:"none", background:"#D42E12", color:"#fff", fontSize:15, fontWeight:800, cursor:"pointer", boxShadow:"0 8px 24px rgba(212,46,18,.3)", marginTop:4 }}>
-              Track This Route →
-            </button>
-          )}
-        </div>
-      )}
-    </>
-  );
+  return null;
 }
 
 // ─── SCREENS ─────────────────────────────────────────────────────────────────
@@ -1395,7 +1426,7 @@ export default function App() {
 
             {/* Mixed mode */}
             {inputMode === "mixed" && (
-              <MixedInputPanel onTrack={r => { setRoute(r); setScreen(S.CONFIRM); }} />
+              <JourneyBuilder onTrack={r => { setRoute(r); setScreen(S.CONFIRM); }} />
             )}
 
             {routeError && <div style={{ color:"#EF4444", fontSize:12, marginBottom:10, paddingLeft:4 }}>{routeError}</div>}
