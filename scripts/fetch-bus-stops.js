@@ -1,6 +1,4 @@
-// Run once: node scripts/fetch-bus-stops.js
-// Fetches all bus stops AND routes from LTA DataMall and writes as static JS modules
-
+// node scripts/fetch-bus-stops.js
 const fs = require("fs");
 const path = require("path");
 
@@ -10,65 +8,61 @@ if (!API_KEY) { console.error("Set LTA_API_KEY env var"); process.exit(1); }
 async function fetchAll(endpoint) {
   const results = [];
   let skip = 0;
+  let page = 0;
   while (true) {
+    page++;
+    console.log(`  ${endpoint} page ${page} (skip=${skip})...`);
     const res = await fetch(
       `https://datamall2.mytransport.sg/ltaodataservice/${endpoint}?$skip=${skip}`,
       { headers: { AccountKey: API_KEY } }
     );
-    if (!res.ok) throw new Error(`${endpoint} failed: ${res.status}`);
+    if (!res.ok) {
+      console.error(`  ERROR ${res.status} on page ${page}`);
+      throw new Error(`${endpoint} failed: ${res.status}`);
+    }
     const data = await res.json();
     const batch = data.value || [];
+    console.log(`  Got ${batch.length} records (total so far: ${results.length + batch.length})`);
     results.push(...batch);
-    process.stdout.write(`\r${endpoint}: ${results.length} records...`);
-    if (batch.length < 500) break;
+    if (batch.length < 500) {
+      console.log(`  Done — last batch had ${batch.length} records`);
+      break;
+    }
     skip += 500;
   }
-  console.log(` done.`);
   return results;
 }
 
 async function main() {
-  // Fetch stops
+  console.log("Fetching BusStops...");
   const stopsRaw = await fetchAll("BusStops");
+  console.log(`Total stops: ${stopsRaw.length}`);
+
   const stopMap = {};
   for (const s of stopsRaw) {
     stopMap[s.BusStopCode] = [s.Latitude, s.Longitude, s.Description];
   }
-
-  const stopsOut = `// Auto-generated — do not edit manually
-// Last updated: ${new Date().toISOString().slice(0,10)} — ${stopsRaw.length} stops
-// Format: { "StopCode": [lat, lng, "Name"] }
-const BUS_STOPS = ${JSON.stringify(stopMap)};
-export default BUS_STOPS;
-`;
+  const stopsOut = `// Auto-generated ${new Date().toISOString().slice(0,10)} — ${stopsRaw.length} stops\nconst BUS_STOPS = ${JSON.stringify(stopMap)};\nexport default BUS_STOPS;\n`;
   fs.writeFileSync(path.join(__dirname, "../src/busStops.js"), stopsOut);
-  console.log(`Wrote busStops.js (${Math.round(stopsOut.length/1024)}kb)`);
+  console.log(`busStops.js: ${Math.round(stopsOut.length/1024)}kb`);
 
-  // Fetch routes
+  console.log("\nFetching BusRoutes...");
   const routesRaw = await fetchAll("BusRoutes");
+  console.log(`Total route records: ${routesRaw.length}`);
 
-  // Compact format: { "ServiceNo_Direction": ["stop1","stop2",...] }
-  // Only store stop codes in sequence — we look up lat/lng from stopMap at runtime
-  const routeMap = {};
+  const tmp = {};
   for (const r of routesRaw) {
     const key = `${r.ServiceNo}_${r.Direction}`;
-    if (!routeMap[key]) routeMap[key] = [];
-    routeMap[key].push({ c: r.BusStopCode, s: r.StopSequence });
+    if (!tmp[key]) tmp[key] = [];
+    tmp[key].push({ c: r.BusStopCode, s: r.StopSequence });
   }
-  // Sort by sequence and keep only stop codes
-  const compactRoutes = {};
-  for (const [key, stops] of Object.entries(routeMap)) {
-    compactRoutes[key] = stops.sort((a,b) => a.s - b.s).map(s => s.c);
+  const routeMap = {};
+  for (const [key, stops] of Object.entries(tmp)) {
+    routeMap[key] = stops.sort((a,b) => a.s - b.s).map(s => s.c);
   }
-
-  const routesOut = `// Auto-generated — do not edit manually
-// Last updated: ${new Date().toISOString().slice(0,10)} — ${routesRaw.length} records
-// Format: { "ServiceNo_Direction": ["stopCode1","stopCode2",...] }
-const BUS_ROUTES = ${JSON.stringify(compactRoutes)};
-export default BUS_ROUTES;
-`;
+  const routesOut = `// Auto-generated ${new Date().toISOString().slice(0,10)} — ${routesRaw.length} records, ${Object.keys(routeMap).length} routes\nconst BUS_ROUTES = ${JSON.stringify(routeMap)};\nexport default BUS_ROUTES;\n`;
   fs.writeFileSync(path.join(__dirname, "../src/busRoutes.js"), routesOut);
-  console.log(`Wrote busRoutes.js (${Math.round(routesOut.length/1024)}kb)`);
+  console.log(`busRoutes.js: ${Math.round(routesOut.length/1024)}kb`);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
