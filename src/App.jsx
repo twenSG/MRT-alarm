@@ -635,25 +635,41 @@ function BusInputPanel({ onTrack }) {
     setTimeout(() => {
       try {
         const BUS_MIN = 3;
-        const NEARBY_M = 800; // Find stops within an 800m bubble
+        const ORIGIN_RADIUS = 600;  // search all stops within 600m of origin
+        const DEST_RADIUS   = 300;  // only accept dest stops within 300m of target
+        const DEST_FALLBACK = 600;  // if nothing within 300m, expand to 600m
 
-        // Always search all nearby stops regardless of input method
-        const getStopCodes = (field) => {
-          const lat = field.coord.lat, lng = field.coord.lng;
-          const nearby = Object.entries(BUS_STOPS)
-            .map(([code, v]) => ({ code, d: haversineM(lat, lng, v[0], v[1]) }))
-            .filter(s => s.d <= NEARBY_M)
-            .sort((a, b) => a.d - b.d)
-            .slice(0, 10)
-            .map(s => s.code);
-          if (field.value.length === 5 && BUS_STOPS[field.value] && !nearby.includes(field.value)) {
-            nearby.push(field.value);
-          }
-          return nearby;
-        };
+        const oLat = from.coord.lat, oLng = from.coord.lng;
+        const dLat = to.coord.lat,   dLng = to.coord.lng;
 
-        const originCodes = new Set(getStopCodes(from));
-        const destCodes   = new Set(getStopCodes(to));
+        // Origin: all stops within radius (both sides of road, interchanges etc)
+        let originStops = Object.entries(BUS_STOPS)
+          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(oLat, oLng, v[0], v[1]) }))
+          .filter(s => s.d <= ORIGIN_RADIUS).sort((a,b) => a.d - b.d).slice(0, 15);
+        // Always include explicitly entered stop code
+        if (from.value.length === 5 && BUS_STOPS[from.value] && !originStops.find(s => s.code === from.value)) {
+          const v = BUS_STOPS[from.value];
+          originStops.push({ code:from.value, lat:v[0], lng:v[1], name:v[2], d:0 });
+        }
+
+        // Destination: find closest stop first, then use tight radius around it
+        const allDestStops = Object.entries(BUS_STOPS)
+          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(dLat, dLng, v[0], v[1]) }))
+          .sort((a,b) => a.d - b.d);
+        const closestDestStop = allDestStops[0];
+        // Accept stops within 300m of target, or fallback to 600m if nothing close
+        let destRadius = DEST_RADIUS;
+        const tightDest = allDestStops.filter(s => s.d <= destRadius);
+        if (tightDest.length === 0) destRadius = DEST_FALLBACK;
+        let destStops = allDestStops.filter(s => s.d <= destRadius).slice(0, 10);
+        // Always include explicitly entered dest stop code
+        if (to.value.length === 5 && BUS_STOPS[to.value] && !destStops.find(s => s.code === to.value)) {
+          const v = BUS_STOPS[to.value];
+          destStops.push({ code:to.value, lat:v[0], lng:v[1], name:v[2], d:haversineM(dLat, dLng, v[0], v[1]) });
+        }
+
+        const originCodes = new Set(originStops.map(s => s.code));
+        const destCodes   = new Set(destStops.map(s => s.code));
 
         if (!originCodes.size || !destCodes.size) {
           setRoutes({ list:[], nearbyBoard:[], nearbyAlight:[] });
@@ -662,44 +678,29 @@ function BusInputPanel({ onTrack }) {
         }
 
         const found = [];
-        const dLat = to.coord.lat, dLng = to.coord.lng;
-        const oLat = from.coord.lat, oLng = from.coord.lng;
 
         for (const [key, stops] of Object.entries(BUS_ROUTES)) {
           const [serviceNo] = key.split("_");
           let oIdx = -1;
-          const candidateDest = []; 
+          const candidateDest = [];
 
           for (let i = 0; i < stops.length; i++) {
             if (originCodes.has(stops[i]) && oIdx === -1) oIdx = i;
             if (oIdx !== -1 && i > oIdx && destCodes.has(stops[i])) {
               const sv = BUS_STOPS[stops[i]];
-              if (sv) candidateDest.push({ i, code:stops[i], lat:sv[0], lng:sv[1], name:sv[2], distToTarget: haversineM(dLat, dLng, sv[0], sv[1]) });
+              if (sv) candidateDest.push({ i, code:stops[i], lat:sv[0], lng:sv[1], name:sv[2],
+                distToTarget: haversineM(dLat, dLng, sv[0], sv[1]) });
             }
           }
           if (oIdx === -1 || !candidateDest.length) continue;
 
           const fv = BUS_STOPS[stops[oIdx]];
           if (!fv) continue;
-          const distFromOrigin = haversineM(oLat, oLng, fv[0], fv[1]);
 
-          // Score every candidate stop for this specific bus route based on Bus Time + Walking Time
-          const scoredCandidates = candidateDest.map(c => {
-            const stopCount = c.i - oIdx;
-            const busMins = stopCount * BUS_MIN;
-            const walkAlightMins = c.distToTarget / 80; // 80 meters per minute walking speed
-            const walkBoardMins = distFromOrigin / 80;
-            return {
-              candidate: c,
-              stopCount,
-              totalMins: walkBoardMins + busMins + walkAlightMins
-            };
-          });
-
-          // Pick the single best alighting stop for this route that minimizes total effort
-          const bestOption = scoredCandidates.sort((a, b) => a.totalMins - b.totalMins)[0];
-          const best = bestOption.candidate;
-          const stopCount = bestOption.stopCount;
+          // Among candidate dest stops, pick the one closest to the target coord
+          // This anchors the alight stop to where the user actually wants to go
+          const best = candidateDest.sort((a,b) => a.distToTarget - b.distToTarget)[0];
+          const stopCount = best.i - oIdx;
 
           const legStops = stops.slice(oIdx, best.i + 1).map(c => {
             const sv = BUS_STOPS[c];
@@ -710,27 +711,24 @@ function BusInputPanel({ onTrack }) {
             serviceNo,
             from: { code:stops[oIdx], lat:fv[0], lng:fv[1], name:fv[2] },
             to:   { code:best.code, lat:best.lat, lng:best.lng, name:best.name },
-            stops: legStops, 
-            stopCount, 
-            estMins: stopCount * BUS_MIN,
-            totalMins: bestOption.totalMins // Save total journey time for global sorting
+            stops: legStops, stopCount, estMins: stopCount * BUS_MIN,
+            distToTarget: best.distToTarget,
           });
         }
 
-        // Deduplicate and sort globally by true journey time (riding + walking)
+        // Deduplicate by from+to pair, sort by stops then proximity to target
         const seenKey = new Set();
         const dedupedRoutes = [];
-        for (const r of found.sort((a, b) => a.totalMins - b.totalMins)) {
+        for (const r of found.sort((a,b) => a.estMins - b.estMins || a.distToTarget - b.distToTarget)) {
           const key = r.serviceNo + "|" + r.from.code + "|" + r.to.code;
           if (!seenKey.has(key)) { seenKey.add(key); dedupedRoutes.push(r); }
         }
 
-        // Nearby stops for the swap UI on confirm screen
         const nearbyBoard  = Object.entries(BUS_STOPS)
-          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(from.coord.lat, from.coord.lng, v[0], v[1]) }))
+          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(oLat, oLng, v[0], v[1]) }))
           .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 3);
         const nearbyAlight = Object.entries(BUS_STOPS)
-          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(to.coord.lat, to.coord.lng, v[0], v[1]) }))
+          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(dLat, dLng, v[0], v[1]) }))
           .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 3);
 
         setRoutes({ list: dedupedRoutes.slice(0, 8), nearbyBoard, nearbyAlight });
@@ -863,76 +861,214 @@ function BusInputPanel({ onTrack }) {
 
 
 // ─── MIXED ROUTING ───────────────────────────────────────────────────────────
+// Supports: pure MRT, pure bus (1-3 legs), bus+MRT, MRT+bus, bus+MRT+bus
 function computeMixedRoutes(oLat, oLng, dLat, dLng) {
   const BUS_MIN = 3;
-  const results = [];
+  const MRT_MIN = 2;
+  const TRANSFER_PENALTY = 5;
+  const ORIGIN_RADIUS = 600;
+  const DEST_RADIUS   = 400;
+  const TRANSFER_WALK = 300; // max walk between bus stops to transfer
 
-  // 1. Map: Which routes pass through which stop?
-  const stopToRoutes = {};
-  for (const [key, stops] of Object.entries(BUS_ROUTES)) {
-    const serviceNo = key.split("_")[0];
-    stops.forEach(stopCode => {
-      if (!stopToRoutes[stopCode]) stopToRoutes[stopCode] = [];
-      stopToRoutes[stopCode].push({ serviceNo, stops });
+  function stopInfo(code) {
+    const v = BUS_STOPS[code];
+    return v ? { code, lat:v[0], lng:v[1], name:v[2] } : null;
+  }
+
+  function buildLegStops(routeStops, fromIdx, toIdx) {
+    return routeStops.slice(fromIdx, toIdx+1).map(c => {
+      const v = BUS_STOPS[c];
+      return v ? { code:c, lat:v[0], lng:v[1], name:v[2] } : { code:c, lat:0, lng:0, name:c };
     });
   }
 
-  // 2. Find start and end points
-  const nearFrom = Object.entries(BUS_STOPS)
-    .map(([code, v]) => ({ code, d: haversineM(oLat, oLng, v[0], v[1]) }))
-    .filter(s => s.d <= 600);
-  const nearTo = Object.entries(BUS_STOPS)
-    .map(([code, v]) => ({ code, d: haversineM(dLat, dLng, v[0], v[1]) }))
-    .filter(s => s.d <= 600);
+  function buildAlertsFull(legs) {
+    const alerts = [];
+    legs.forEach((leg, i) => {
+      const isLast = i === legs.length - 1;
+      const lastStop = leg.stops[leg.stops.length - 1];
+      if (!isLast) {
+        const nextLeg = legs[i+1];
+        const lineLabel = nextLeg.line === "BUS" ? `Bus ${nextLeg.serviceNo}` : (LINE_META[nextLeg.line]?.label || nextLeg.line);
+        alerts.push({ id:`transfer-${i}-${lastStop.code}`, type:"transfer", stopCode:lastStop.code, stopName:lastStop.name, radiusM:400, message:"Get ready to transfer", detail:`Board ${lineLabel} at ${lastStop.name}`, color:"#F59E0B", vibratePattern:[200,100,200], lat:lastStop.lat, lng:lastStop.lng });
+      } else {
+        alerts.push({ id:`alight-${lastStop.code}`, type:"alight", stopCode:lastStop.code, stopName:lastStop.name, radiusM:400, message:"Alight now!", detail:`${lastStop.name} (${lastStop.code})`, color:"#009645", vibratePattern:[300,100,300,100,600], lat:lastStop.lat, lng:lastStop.lng });
+      }
+    });
+    return alerts;
+  }
 
-  // 3. Chain-Search: BFS for Bus 1 -> Bus 2 -> Bus 3
-  for (const start of nearFrom) {
-    const routes1 = stopToRoutes[start.code] || [];
-    for (const r1 of routes1) {
-      const idx1 = r1.stops.indexOf(start.code);
-      
-      for (let i = idx1 + 1; i < r1.stops.length; i++) {
-        const transferStop1 = r1.stops[i];
-        const routes2 = stopToRoutes[transferStop1] || [];
-        
+  // Stops near origin and destination
+  const nearOrigin = Object.entries(BUS_STOPS)
+    .map(([code, v]) => ({ code, lat:v[0], lng:v[1], d:haversineM(oLat, oLng, v[0], v[1]) }))
+    .filter(s => s.d <= ORIGIN_RADIUS).sort((a,b) => a.d - b.d).slice(0, 10);
+  const nearDest = Object.entries(BUS_STOPS)
+    .map(([code, v]) => ({ code, lat:v[0], lng:v[1], d:haversineM(dLat, dLng, v[0], v[1]) }))
+    .filter(s => s.d <= DEST_RADIUS).sort((a,b) => a.d - b.d).slice(0, 10);
+  const nearOriginCodes = new Set(nearOrigin.map(s => s.code));
+  const nearDestCodes   = new Set(nearDest.map(s => s.code));
+
+  // MRT stations near origin and dest
+  const nearOriginStations = UNIQUE_STATIONS
+    .map(s => ({ ...s, d:haversineM(oLat, oLng, s.lat, s.lng) }))
+    .filter(s => s.d <= 800).sort((a,b) => a.d - b.d).slice(0, 4);
+  const nearDestStations = UNIQUE_STATIONS
+    .map(s => ({ ...s, d:haversineM(dLat, dLng, s.lat, s.lng) }))
+    .filter(s => s.d <= 800).sort((a,b) => a.d - b.d).slice(0, 4);
+
+  // Build stop→routes index
+  const stopToRoutes = {};
+  for (const [key, stops] of Object.entries(BUS_ROUTES)) {
+    const serviceNo = key.split("_")[0];
+    stops.forEach((code, idx) => {
+      if (!stopToRoutes[code]) stopToRoutes[code] = [];
+      stopToRoutes[code].push({ key, serviceNo, stops, idx });
+    });
+  }
+
+  const results = [];
+  const seen = new Set();
+  function addResult(r) {
+    const key = r.legs.map(l => (l.serviceNo||l.line) + l.stops[0].code).join("|");
+    if (!seen.has(key)) { seen.add(key); results.push(r); }
+  }
+
+  // ── 1. Pure MRT ──────────────────────────────────────────────────────────
+  for (const os of nearOriginStations.slice(0,2)) {
+    for (const ds of nearDestStations.slice(0,2)) {
+      if (os.name === ds.name) continue;
+      const path = findPathFewestTransfers(os.name, ds.name) || findPath(os.name, ds.name);
+      if (!path) continue;
+      const legs = pathToLegs(path);
+      if (!legs.length) continue;
+      const alerts = buildAlerts(legs);
+      const stopCount = [...new Set(path.map(c => STATIONS.find(s=>s.code===c)?.name))].length - 1;
+      addResult({ type:"mrt", label:`🚇 MRT: ${os.name} → ${ds.name}`, legs, alerts,
+        stopCount, transfers:legs.length-1, estMins:stopCount*MRT_MIN+(legs.length-1)*TRANSFER_PENALTY,
+        fromName:os.name, toName:ds.name });
+    }
+  }
+
+  // ── 2. Direct bus (1 leg) ────────────────────────────────────────────────
+  for (const [key, stops] of Object.entries(BUS_ROUTES)) {
+    const serviceNo = key.split("_")[0];
+    let oIdx = -1;
+    const candidates = [];
+    for (let i = 0; i < stops.length; i++) {
+      if (nearOriginCodes.has(stops[i]) && oIdx === -1) oIdx = i;
+      if (oIdx !== -1 && i > oIdx && nearDestCodes.has(stops[i])) {
+        const sv = BUS_STOPS[stops[i]];
+        if (sv) candidates.push({ i, code:stops[i], lat:sv[0], lng:sv[1], name:sv[2], d:haversineM(dLat,dLng,sv[0],sv[1]) });
+      }
+    }
+    if (oIdx === -1 || !candidates.length) continue;
+    const best = candidates.sort((a,b) => a.d - b.d)[0];
+    const fv = BUS_STOPS[stops[oIdx]]; if (!fv) continue;
+    const stopCount = best.i - oIdx;
+    const legStops = buildLegStops(stops, oIdx, best.i);
+    const legs = [{ line:"BUS", serviceNo, stops:legStops }];
+    addResult({ type:"bus", label:`🚌 Bus ${serviceNo}`, legs, alerts:buildAlertsFull(legs),
+      stopCount, transfers:0, estMins:stopCount*BUS_MIN,
+      fromName:fv[2], toName:best.name });
+  }
+
+  // ── 3. Bus → Bus (2 legs, transfer at stop within walking distance) ───────
+  for (const [key1, stops1] of Object.entries(BUS_ROUTES)) {
+    const svc1 = key1.split("_")[0];
+    let oIdx = -1;
+    for (let i = 0; i < stops1.length; i++) {
+      if (nearOriginCodes.has(stops1[i]) && oIdx === -1) { oIdx = i; break; }
+    }
+    if (oIdx === -1) continue;
+    const fv = BUS_STOPS[stops1[oIdx]]; if (!fv) continue;
+
+    for (let i = oIdx+2; i < stops1.length; i++) {
+      const xCode = stops1[i];
+      const xv = BUS_STOPS[xCode]; if (!xv) continue;
+      // Find all stops within TRANSFER_WALK of this stop
+      const nearX = Object.entries(BUS_STOPS)
+        .filter(([c,v]) => c !== xCode && haversineM(xv[0],xv[1],v[0],v[1]) <= TRANSFER_WALK)
+        .map(([c]) => c);
+      const transferStops = [xCode, ...nearX];
+
+      for (const xCode2 of transferStops) {
+        const routes2 = stopToRoutes[xCode2] || [];
         for (const r2 of routes2) {
-          if (r2.serviceNo === r1.serviceNo) continue;
-          const idx2 = r2.stops.indexOf(transferStop1);
-          
-          for (let j = idx2 + 1; j < r2.stops.length; j++) {
-            const transferStop2 = r2.stops[j];
-            const routes3 = stopToRoutes[transferStop2] || [];
-            
-            for (const r3 of routes3) {
-              if (r3.serviceNo === r2.serviceNo) continue;
-              const idx3 = r3.stops.indexOf(transferStop2);
-              const endIdx = r3.stops.findIndex(s => nearTo.some(n => n.code === s));
-              
-              if (endIdx > idx3) {
-                // SUCCESS: Found 913 -> 168 -> 4 connection
-                results.push({
-                  type: "bus",
-                  isBus: true,
-                  serviceNo: `${r1.serviceNo} → ${r2.serviceNo} → ${r3.serviceNo}`,
-                  fromName: BUS_STOPS[start.code][2],
-                  toName: BUS_STOPS[r3.stops[endIdx]][2],
-                  stopCount: (i-idx1) + (j-idx2) + (endIdx-idx3),
-                  estMins: ((i-idx1) + (j-idx2) + (endIdx-idx3)) * BUS_MIN + 10,
-                  legs: [
-                    { line: "BUS", serviceNo: r1.serviceNo, stops: r1.stops.slice(idx1, i+1).map(c=>({code:c, name:BUS_STOPS[c]?.[2]})) },
-                    { line: "BUS", serviceNo: r2.serviceNo, stops: r2.stops.slice(idx2, j+1).map(c=>({code:c, name:BUS_STOPS[c]?.[2]})) },
-                    { line: "BUS", serviceNo: r3.serviceNo, stops: r3.stops.slice(idx3, endIdx+1).map(c=>({code:c, name:BUS_STOPS[c]?.[2]})) }
-                  ],
-                  alerts: [{ id: "transfer", type: "transfer", message: "Transfer at Interchange" }]
-                });
-              }
+          if (r2.serviceNo === svc1) continue;
+          const idx2 = r2.stops.indexOf(xCode2);
+          const candidates2 = [];
+          for (let j = idx2+1; j < r2.stops.length; j++) {
+            if (nearDestCodes.has(r2.stops[j])) {
+              const sv = BUS_STOPS[r2.stops[j]];
+              if (sv) candidates2.push({ j, code:r2.stops[j], lat:sv[0], lng:sv[1], name:sv[2], d:haversineM(dLat,dLng,sv[0],sv[1]) });
             }
           }
+          if (!candidates2.length) continue;
+          const best2 = candidates2.sort((a,b) => a.d - b.d)[0];
+          const stopCount = (i-oIdx) + (best2.j-idx2);
+          if (stopCount > 40) continue; // sanity cap
+          const xv2 = BUS_STOPS[xCode2]; if (!xv2) continue;
+          const legs = [
+            { line:"BUS", serviceNo:svc1, stops:buildLegStops(stops1, oIdx, i) },
+            { line:"BUS", serviceNo:r2.serviceNo, stops:buildLegStops(r2.stops, idx2, best2.j) },
+          ];
+          addResult({ type:"bus+bus", label:`🚌 Bus ${svc1} → Bus ${r2.serviceNo}`,
+            legs, alerts:buildAlertsFull(legs),
+            stopCount, transfers:1, estMins:stopCount*BUS_MIN+TRANSFER_PENALTY,
+            fromName:fv[2], toName:best2.name });
+        }
+      }
+      if (results.filter(r=>r.type==="bus+bus").length > 20) break; // cap
+    }
+    if (results.filter(r=>r.type==="bus+bus").length > 20) break;
+  }
+
+  // ── 4. Bus+MRT, MRT+Bus ──────────────────────────────────────────────────
+  // Bus to MRT station, then MRT to dest
+  for (const ds of nearDestStations.slice(0,2)) {
+    const stationStops = Object.entries(BUS_STOPS)
+      .map(([code,v]) => ({ code, lat:v[0], lng:v[1], d:haversineM(ds.lat,ds.lng,v[0],v[1]) }))
+      .filter(s => s.d <= 400).map(s => s.code);
+    if (!stationStops.length) continue;
+    const stationDestCodes = new Set(stationStops);
+    for (const [key, stops] of Object.entries(BUS_ROUTES)) {
+      const svc = key.split("_")[0];
+      let oIdx = -1;
+      const candidates = [];
+      for (let i = 0; i < stops.length; i++) {
+        if (nearOriginCodes.has(stops[i]) && oIdx === -1) oIdx = i;
+        if (oIdx !== -1 && i > oIdx && stationDestCodes.has(stops[i])) {
+          const sv = BUS_STOPS[stops[i]]; if (sv) candidates.push({ i, code:stops[i] });
+        }
+      }
+      if (oIdx === -1 || !candidates.length) continue;
+      const fv = BUS_STOPS[stops[oIdx]]; if (!fv) continue;
+      const xfer = candidates[0];
+      for (const nearDs of nearDestStations.slice(0,2)) {
+        if (ds.name !== nearDs.name) continue;
+        // Try MRT from this station to dest stations
+        for (const finalDs of nearDestStations.slice(0,2)) {
+          if (ds.name === finalDs.name) continue;
+          const path = findPathFewestTransfers(ds.name, finalDs.name) || findPath(ds.name, finalDs.name);
+          if (!path) continue;
+          const mrtLegs = pathToLegs(path);
+          if (!mrtLegs.length) continue;
+          const busStops = buildLegStops(stops, oIdx, xfer.i);
+          const legs = [{ line:"BUS", serviceNo:svc, stops:busStops }, ...mrtLegs];
+          const stopCount = (xfer.i - oIdx) + [...new Set(path.map(c=>STATIONS.find(s=>s.code===c)?.name))].length - 1;
+          addResult({ type:"bus+mrt", label:`🚌 Bus ${svc} → 🚇 MRT`,
+            legs, alerts:buildAlertsFull(legs),
+            stopCount, transfers:1+mrtLegs.length-1, estMins:stopCount*BUS_MIN+TRANSFER_PENALTY,
+            fromName:fv[2], toName:finalDs.name });
         }
       }
     }
   }
-  return results.sort((a,b) => a.estMins - b.estMins).slice(0, 3);
+
+  // Sort by fewest transfers then time, return top 5
+  return results
+    .sort((a,b) => a.transfers - b.transfers || a.estMins - b.estMins)
+    .slice(0, 5);
 }
 
 function NearbyStopPicker({ stops, selectedCoord, onPick }) {
