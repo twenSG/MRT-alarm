@@ -538,8 +538,8 @@ function NearMeButton({ onFound, style }) {
       navigator.geolocation.getCurrentPosition(pos => {
         onFound({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       }, null, { enableHighAccuracy: true, timeout: 8000 });
-    }} style={{ background:"#1E2D40", border:"1px solid #2D3F55", borderRadius:8, color:"#60A5FA", fontSize:10, fontWeight:700, padding:"0 8px", height:24, cursor:"pointer", flexShrink:0, whiteSpace:"nowrap", lineHeight:"24px", ...style }}>
-      📍
+    }} style={{ background:"#1E2D40", border:"1px solid #2D3F55", borderRadius:8, color:"#60A5FA", fontSize:11, fontWeight:700, padding:"0 8px", height:24, cursor:"pointer", flexShrink:0, whiteSpace:"nowrap", lineHeight:"24px", ...style }}>
+      📍 Near me
     </button>
   );
 }
@@ -1389,10 +1389,8 @@ export default function App() {
             {/* MRT mode */}
             {inputMode === "station" && (
               <>
-                <div style={{ position:"relative" }}>
-                  <StationPicker label="From" value={fromStation} onChange={st => { setFromStation(st); setRouteError(null); }} />
-                  <NearMeBtn onFound={st => { setFromStation(st); setRouteError(null); }} style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)" }} />
-                </div>
+                <StationPicker label="From" value={fromStation} onChange={st => { setFromStation(st); setRouteError(null); }}
+                  extra={<NearMeBtn onFound={st => { setFromStation(st); setRouteError(null); }} />} />
                 {nearMeDebug && <div style={{ color:"#6B7280", fontSize:10, fontFamily:"DM Mono", padding:"2px 2px 6px", wordBreak:"break-all" }}>{nearMeDebug}</div>}
                 <StationPicker label="To" value={toStation} onChange={st => { setToStation(st); setRouteError(null); }} />
                 <div style={{ marginBottom:16 }}>
