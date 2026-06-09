@@ -1,0 +1,31 @@
+name: Update Bus Stop Data
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 2 1 * *"  # Re-fetch monthly (new stops open occasionally)
+  workflow_dispatch:      # Allow manual trigger
+
+jobs:
+  fetch-stops:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch bus stops from LTA DataMall
+        env:
+          LTA_API_KEY: ${{ secrets.LTA_API_KEY }}
+        run: node scripts/fetch-bus-stops.js
+
+      - name: Commit updated stop data if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/busStops.js
+          git diff --staged --quiet || git commit -m "chore: update bus stop data"
+          git push
