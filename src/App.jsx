@@ -864,83 +864,74 @@ function BusInputPanel({ onTrack }) {
 
 // ─── MIXED ROUTING ───────────────────────────────────────────────────────────
 function computeMixedRoutes(oLat, oLng, dLat, dLng) {
-  const STATION_RADIUS = 800;
-  const BUS_STOP_RADIUS = 400;
+  const BUS_STOPS_MAP = BUS_STOPS; 
+  const BUS_ROUTES_LIST = Object.entries(BUS_ROUTES);
+  
+  // Scoring parameters
+  const WALKING_SPEED = 80; // meters per min
   const MRT_MIN = 2;
   const BUS_MIN = 3;
   const TRANSFER_PENALTY = 5;
-  const MAX_TRANSFERS = 3;
-
-  const startStations = UNIQUE_STATIONS.map(s => ({ ...s, d: haversineM(oLat, oLng, s.lat, s.lng) })).filter(s => s.d <= STATION_RADIUS);
-  const startBus = Object.entries(BUS_STOPS).map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(oLat, oLng, v[0], v[1]) })).filter(s => s.d <= BUS_STOP_RADIUS);
-  
-  const endStations = UNIQUE_STATIONS.map(s => ({ ...s, d: haversineM(dLat, dLng, s.lat, s.lng) })).filter(s => s.d <= STATION_RADIUS);
-  const endBus = Object.entries(BUS_STOPS).map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(dLat, dLng, v[0], v[1]) })).filter(s => s.d <= BUS_STOP_RADIUS);
-
-  // Queue: { type, id, lat, lng, estMins, transfers, legs, alerts }
-  let queue = [
-    ...startBus.map(s => ({ type: "bus", id: s.code, lat: s.lat, lng: s.lng, estMins: s.d/80, transfers: 0, legs: [], alerts: [] })),
-    ...startStations.map(s => ({ type: "mrt", id: s.name, lat: s.lat, lng: s.lng, estMins: s.d/80, transfers: 0, legs: [], alerts: [] }))
-  ];
 
   const results = [];
-  const visited = new Set(); // Prevent infinite loops
 
-  while (queue.length > 0) {
-    queue.sort((a, b) => a.estMins - b.estMins);
-    const curr = queue.shift();
-    
-    const stateKey = `${curr.type}-${curr.id}-${curr.transfers}`;
-    if (visited.has(stateKey)) continue;
-    visited.add(stateKey);
+  // 1. Identify nearby entry points
+  const nearBusFrom = Object.entries(BUS_STOPS_MAP)
+    .map(([code, v]) => ({ code, lat: v[0], lng: v[1], name: v[2], d: haversineM(oLat, oLng, v[0], v[1]) }))
+    .filter(s => s.d <= 600);
+  
+  const nearBusTo = Object.entries(BUS_STOPS_MAP)
+    .map(([code, v]) => ({ code, lat: v[0], lng: v[1], name: v[2], d: haversineM(dLat, dLng, v[0], v[1]) }))
+    .filter(s => s.d <= 600);
 
-    // Check if at destination
-    const isAtDest = (curr.type === "bus" && endBus.some(b => b.code === curr.id)) || 
-                     (curr.type === "mrt" && endStations.some(s => s.name === curr.id));
-    
-    if (isAtDest) {
-      results.push(curr);
-      if (results.length >= 3) break;
-      continue;
-    }
-
-    if (curr.transfers >= MAX_TRANSFERS) continue;
-
-    // Expand: Bus
-    if (curr.type === "bus") {
-      // 1. Take next bus leg
-      for (const [key, stops] of Object.entries(BUS_ROUTES)) {
-        const idx = stops.indexOf(curr.id);
-        if (idx === -1 || idx === stops.length - 1) continue;
-        const nextStops = stops.slice(idx + 1);
-        const leg = { line: "BUS", serviceNo: key.split("_")[0], stops: nextStops.map(c => BUS_STOPS[c] ? {code:c, name:BUS_STOPS[c][2]} : {code:c, name:c}) };
-        queue.push({ 
-            type: "bus", id: nextStops.slice(-1)[0], lat: BUS_STOPS[nextStops.slice(-1)[0]][0], lng: BUS_STOPS[nextStops.slice(-1)[0]][1],
-            estMins: curr.estMins + (nextStops.length * BUS_MIN), transfers: curr.transfers, legs: [...curr.legs, leg] 
-        });
-      }
-      // 2. Switch to MRT
-      const nearestMRT = startStations.sort((a,b) => a.d - b.d)[0]; // Simplified for performance
-      if (nearestMRT) {
-        queue.push({ type: "mrt", id: nearestMRT.name, lat: nearestMRT.lat, lng: nearestMRT.lng, estMins: curr.estMins + TRANSFER_PENALTY, transfers: curr.transfers + 1, legs: curr.legs });
-      }
-    }
-
-    // Expand: MRT
-    if (curr.type === "mrt") {
-      const path = findPath(curr.id, endStations[0]?.name || UNIQUE_STATIONS[0].name);
-      if (path) {
-        queue.push({ type: "mrt", id: path.slice(-1)[0], lat: 0, lng: 0, estMins: curr.estMins + (path.length * MRT_MIN), transfers: curr.transfers + 1, legs: curr.legs });
-      }
-      // Switch to Bus
-      const nearestBus = startBus[0];
-      if (nearestBus) {
-        queue.push({ type: "bus", id: nearestBus.code, lat: nearestBus.lat, lng: nearestBus.lng, estMins: curr.estMins + TRANSFER_PENALTY, transfers: curr.transfers + 1, legs: curr.legs });
+  // 2. Simple Bus-to-Bus Search (covers Bus-Bus-Bus scenarios)
+  for (const start of nearBusFrom) {
+    for (const end of nearBusTo) {
+      for (const [key, stops] of BUS_ROUTES_LIST) {
+        const oIdx = stops.indexOf(start.code);
+        const dIdx = stops.indexOf(end.code);
+        
+        if (oIdx !== -1 && dIdx !== -1 && dIdx > oIdx) {
+          const serviceNo = key.split("_")[0];
+          const stopCount = dIdx - oIdx;
+          
+          results.push({
+            type: "bus",
+            label: `Bus ${serviceNo}: ${start.name} → ${end.name}`,
+            estMins: (stopCount * BUS_MIN) + (start.d / WALKING_SPEED) + (end.d / WALKING_SPEED),
+            transfers: 0,
+            legs: [{ line: "BUS", serviceNo, stops: stops.slice(oIdx, dIdx + 1).map(c => ({code:c, name:BUS_STOPS_MAP[c]?.[2]})) }],
+            fromName: start.name,
+            toName: end.name,
+            stopCount
+          });
+        }
       }
     }
   }
 
-  return results;
+  // 3. MRT Pathing
+  const startSt = UNIQUE_STATIONS.map(s => ({...s, d: haversineM(oLat, oLng, s.lat, s.lng)})).sort((a,b) => a.d-b.d)[0];
+  const endSt = UNIQUE_STATIONS.map(s => ({...s, d: haversineM(dLat, dLng, s.lat, s.lng)})).sort((a,b) => a.d-b.d)[0];
+  
+  if (startSt && endSt) {
+    const path = findPathFewestTransfers(startSt.name, endSt.name) || findPath(startSt.name, endSt.name);
+    if (path) {
+      results.push({
+        type: "mrt",
+        label: `MRT: ${startSt.name} → ${endSt.name}`,
+        estMins: (path.length * MRT_MIN) + (startSt.d / WALKING_SPEED) + (endSt.d / WALKING_SPEED),
+        transfers: 0,
+        legs: pathToLegs(path),
+        fromName: startSt.name,
+        toName: endSt.name,
+        stopCount: path.length
+      });
+    }
+  }
+
+  // Sort by efficiency
+  return results.sort((a, b) => a.estMins - b.estMins).slice(0, 5);
 }
 
 function NearbyStopPicker({ stops, selectedCoord, onPick }) {
