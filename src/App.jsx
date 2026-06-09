@@ -677,7 +677,7 @@ function BusInputPanel({ onTrack }) {
         // Deduplicate by serviceNo keeping shortest trip
         const seen = new Map();
         for (const r of found.sort((a, b) => a.estMins - b.estMins)) {
-          if (!seen.has(r.serviceNo)) seen.set(r.serviceNo, r);
+          if (!seen.has(r.serviceNo) || seen.get(r.serviceNo).estMins > r.estMins) seen.set(r.serviceNo, r);
         }
 
         // Nearby stops for the swap UI on confirm screen
@@ -887,7 +887,7 @@ function computeMixedRoutes(oLat, oLng, dLat, dLng) {
     }
     const seen = new Map();
     for (const r of found.sort((a, b) => a.estMins - b.estMins)) {
-      if (!seen.has(r.serviceNo)) seen.set(r.serviceNo, r);
+      if (!seen.has(r.serviceNo) || seen.get(r.serviceNo).estMins > r.estMins) seen.set(r.serviceNo, r);
     }
     return Array.from(seen.values()).slice(0, 3);
   }
