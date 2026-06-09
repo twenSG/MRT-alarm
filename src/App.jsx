@@ -864,271 +864,83 @@ function BusInputPanel({ onTrack }) {
 
 // ─── MIXED ROUTING ───────────────────────────────────────────────────────────
 function computeMixedRoutes(oLat, oLng, dLat, dLng) {
-  const STATION_RADIUS = 800;   // max walk to MRT station
-  const BUS_STOP_RADIUS = 400;  // max walk to bus stop
-  const MRT_MIN = 2;            // mins per MRT stop
-  const BUS_MIN = 3;            // mins per bus stop
-  const TRANSFER_PENALTY = 5;   // mins per transfer
+  const STATION_RADIUS = 800;
+  const BUS_STOP_RADIUS = 400;
+  const MRT_MIN = 2;
+  const BUS_MIN = 3;
+  const TRANSFER_PENALTY = 5;
   const MAX_TRANSFERS = 3;
 
-  // Helper: Find MRT stations near a coordinate
-  function nearbyStations(lat, lng) {
-    return UNIQUE_STATIONS
-      .map(s => ({ ...s, d: haversineM(lat, lng, s.lat, s.lng) }))
-      .filter(s => s.d <= STATION_RADIUS)
-      .sort((a, b) => a.d - b.d);
-  }
+  const startStations = UNIQUE_STATIONS.map(s => ({ ...s, d: haversineM(oLat, oLng, s.lat, s.lng) })).filter(s => s.d <= STATION_RADIUS);
+  const startBus = Object.entries(BUS_STOPS).map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(oLat, oLng, v[0], v[1]) })).filter(s => s.d <= BUS_STOP_RADIUS);
+  
+  const endStations = UNIQUE_STATIONS.map(s => ({ ...s, d: haversineM(dLat, dLng, s.lat, s.lng) })).filter(s => s.d <= STATION_RADIUS);
+  const endBus = Object.entries(BUS_STOPS).map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(dLat, dLng, v[0], v[1]) })).filter(s => s.d <= BUS_STOP_RADIUS);
 
-  // Helper: Find bus stops near a coordinate
-  function nearbyBusStops(lat, lng) {
-    return Object.entries(BUS_STOPS)
-      .map(([code, v]) => ({ code, lat: v[0], lng: v[1], name: v[2], d: haversineM(lat, lng, v[0], v[1]) }))
-      .filter(s => s.d <= BUS_STOP_RADIUS)
-      .sort((a, b) => a.d - b.d);
-  }
+  // Queue: { type, id, lat, lng, estMins, transfers, legs, alerts }
+  let queue = [
+    ...startBus.map(s => ({ type: "bus", id: s.code, lat: s.lat, lng: s.lng, estMins: s.d/80, transfers: 0, legs: [], alerts: [] })),
+    ...startStations.map(s => ({ type: "mrt", id: s.name, lat: s.lat, lng: s.lng, estMins: s.d/80, transfers: 0, legs: [], alerts: [] }))
+  ];
 
-  // Pre-calculate endpoint options
-  const startStations = nearbyStations(oLat, oLng);
-  const startBusStops = nearbyBusStops(oLat, oLng);
-  const endStations   = nearbyStations(dLat, dLng);
-  const endBusStops   = nearbyBusStops(dLat, dLng);
+  const results = [];
+  const visited = new Set(); // Prevent infinite loops
 
-  // Map to speed up looking up what routes pass through a bus stop code
-  const stopToRoutesMap = {};
-  for (const [routeKey, stops] of Object.entries(BUS_ROUTES)) {
-    stops.forEach((stopCode, idx) => {
-      if (!stopToRoutesMap[stopCode]) stopToRoutesMap[stopCode] = [];
-      stopToRoutesMap[stopCode].push({ routeKey, idx, stops });
-    });
-  }
-
-  const routes = [];
-
-  // Queue state shape: { type, currentCode, currentName, lat, lng, estMins, transfers, legs, alerts }
-  const queue = [];
-
-  // Seed Initial Options: Walk to nearby Bus Stops
-  startBusStops.forEach(bs => {
-    const walkMins = bs.d / 80; // Assuming ~80m per minute walking speed
-    queue.push({
-      type: "bus",
-      currentCode: bs.code,
-      currentName: bs.name,
-      lat: bs.lat,
-      lng: bs.lng,
-      estMins: walkMins,
-      transfers: 0,
-      legs: [],
-      alerts: []
-    });
-  });
-
-  // Seed Initial Options: Walk to nearby MRT Stations
-  startStations.forEach(st => {
-    const walkMins = st.d / 80;
-    queue.push({
-      type: "mrt",
-      currentCode: st.name, // MRT nodes tracked by station name matching existing codebase
-      currentName: st.name,
-      lat: st.lat,
-      lng: st.lng,
-      estMins: walkMins,
-      transfers: 0,
-      legs: [],
-      alerts: []
-    });
-  });
-
-  // Process multi-modal transitions via custom bounded path discovery
   while (queue.length > 0) {
+    queue.sort((a, b) => a.estMins - b.estMins);
     const curr = queue.shift();
+    
+    const stateKey = `${curr.type}-${curr.id}-${curr.transfers}`;
+    if (visited.has(stateKey)) continue;
+    visited.add(stateKey);
 
-    if (curr.transfers > MAX_TRANSFERS) continue;
-    if (curr.estMins > 120) continue; // Prune excessive journeys
+    // Check if at destination
+    const isAtDest = (curr.type === "bus" && endBus.some(b => b.code === curr.id)) || 
+                     (curr.type === "mrt" && endStations.some(s => s.name === curr.id));
+    
+    if (isAtDest) {
+      results.push(curr);
+      if (results.length >= 3) break;
+      continue;
+    }
 
-    // Check destination arrivals from current point
+    if (curr.transfers >= MAX_TRANSFERS) continue;
+
+    // Expand: Bus
     if (curr.type === "bus") {
-      const destMatch = endBusStops.find(d => d.code === curr.currentCode);
-      if (destMatch) {
-        const finalWalkMins = destMatch.d / 80;
-        routes.push({
-          type: "mixed",
-          transfers: curr.transfers,
-          estMins: curr.estMins + finalWalkMins,
-          label: curr.legs.map(l => l.line === "BUS" ? `Bus ${l.serviceNo}` : "MRT").join(" → "),
-          legs: curr.legs,
-          alerts: curr.alerts,
-          stopCount: curr.legs.reduce((sum, l) => sum + l.stops.length - 1, 0),
-          fromName: curr.legs[0]?.stops[0]?.name || curr.currentName,
-          toName: curr.currentName
+      // 1. Take next bus leg
+      for (const [key, stops] of Object.entries(BUS_ROUTES)) {
+        const idx = stops.indexOf(curr.id);
+        if (idx === -1 || idx === stops.length - 1) continue;
+        const nextStops = stops.slice(idx + 1);
+        const leg = { line: "BUS", serviceNo: key.split("_")[0], stops: nextStops.map(c => BUS_STOPS[c] ? {code:c, name:BUS_STOPS[c][2]} : {code:c, name:c}) };
+        queue.push({ 
+            type: "bus", id: nextStops.slice(-1)[0], lat: BUS_STOPS[nextStops.slice(-1)[0]][0], lng: BUS_STOPS[nextStops.slice(-1)[0]][1],
+            estMins: curr.estMins + (nextStops.length * BUS_MIN), transfers: curr.transfers, legs: [...curr.legs, leg] 
         });
       }
-    } else if (curr.type === "mrt") {
-      const destMatch = endStations.find(d => d.name === curr.currentCode);
-      if (destMatch) {
-        const finalWalkMins = destMatch.d / 80;
-        routes.push({
-          type: "mixed",
-          transfers: curr.transfers,
-          estMins: curr.estMins + finalWalkMins,
-          label: curr.legs.map(l => l.line === "BUS" ? `Bus ${l.serviceNo}` : "MRT").join(" → "),
-          legs: curr.legs,
-          alerts: curr.alerts,
-          stopCount: curr.legs.reduce((sum, l) => sum + l.stops.length - 1, 0),
-          fromName: curr.legs[0]?.stops[0]?.name || curr.currentName,
-          toName: curr.currentName
-        });
+      // 2. Switch to MRT
+      const nearestMRT = startStations.sort((a,b) => a.d - b.d)[0]; // Simplified for performance
+      if (nearestMRT) {
+        queue.push({ type: "mrt", id: nearestMRT.name, lat: nearestMRT.lat, lng: nearestMRT.lng, estMins: curr.estMins + TRANSFER_PENALTY, transfers: curr.transfers + 1, legs: curr.legs });
       }
     }
 
-    // EXPANSION STEP 1: If current state is at a Bus Stop, ride a bus or transfer to an MRT station
-    if (curr.type === "bus") {
-      const matchingRoutes = stopToRoutesMap[curr.currentCode] || [];
-      matchingRoutes.forEach(({ routeKey, idx, stops }) => {
-        const [serviceNo] = routeKey.split("_");
-        
-        // Don't repeatedly board the same bus service back-to-back
-        if (curr.legs.length > 0 && curr.legs[curr.legs.length - 1].serviceNo === serviceNo) return;
-
-        // Explore downstream options along this service timeline
-        for (let i = idx + 1; i < stops.length; i++) {
-          const downstreamCode = stops[i];
-          const stopDetails = BUS_STOPS[downstreamCode];
-          if (!stopDetails) continue;
-
-          const stopsPassed = i - idx;
-          const travelMins = stopsPassed * BUS_MIN;
-          const transferCost = curr.legs.length > 0 ? TRANSFER_PENALTY : 0;
-          const addedTransfers = curr.legs.length > 0 ? 1 : 0;
-
-          if (curr.transfers + addedTransfers > MAX_TRANSFERS) continue;
-
-          const legStops = stops.slice(idx, i + 1).map(c => {
-            const sv = BUS_STOPS[c];
-            return sv ? { code: c, lat: sv[0], lng: sv[1], name: sv[2] } : { code: c, lat: 0, lng: 0, name: c };
-          });
-
-          const newLeg = { line: "BUS", stops: legStops, serviceNo };
-          const newAlert = {
-            id: `alight-bus-${serviceNo}-${downstreamCode}-${Date.now()}`,
-            type: "alight",
-            stopCode: downstreamCode,
-            stopName: stopDetails[2],
-            radiusM: 400,
-            message: "Alight now!",
-            detail: `${stopDetails[2]} (${downstreamCode})`,
-            color: "#009645",
-            vibratePattern: [300, 100, 300, 100, 600],
-            lat: stopDetails[0],
-            lng: stopDetails[1]
-          };
-
-          queue.push({
-            type: "bus",
-            currentCode: downstreamCode,
-            currentName: stopDetails[2],
-            lat: stopDetails[0],
-            lng: stopDetails[1],
-            estMins: curr.estMins + travelMins + transferCost,
-            transfers: curr.transfers + addedTransfers,
-            legs: [...curr.legs, newLeg],
-            alerts: [...curr.alerts, newAlert]
-          });
-        }
-      });
-
-      // Transfer Option: Walk from this bus stop to a nearby MRT Station
-      const adjacentStations = nearbyStations(curr.lat, curr.lng);
-      adjacentStations.forEach(st => {
-        // Prevent walking back to a mode if we just came from it
-        if (curr.legs.length > 0 && curr.legs[curr.legs.length - 1].line !== "BUS") return;
-
-        const walkTime = st.d / 80;
-        queue.push({
-          type: "mrt",
-          currentCode: st.name,
-          currentName: st.name,
-          lat: st.lat,
-          lng: st.lng,
-          estMins: curr.estMins + walkTime,
-          transfers: curr.transfers, // Mode transfer state change context handled on boarding expansion
-          legs: curr.legs,
-          alerts: curr.alerts
-        });
-      });
-    }
-
-    // EXPANSION STEP 2: If current state is at an MRT Station, ride MRT lines or transfer to a Bus Stop
+    // Expand: MRT
     if (curr.type === "mrt") {
-      // Explore traveling to any other MRT station using your precalculated paths or graph system
-      UNIQUE_STATIONS.forEach(targetStation => {
-        if (targetStation.name === curr.currentCode) return;
-
-        // Fetch valid path through graph architecture
-        const path = findPathFewestTransfers(curr.currentCode, targetStation.name) || findPath(curr.currentCode, targetStation.name);
-        if (!path || !path.length) return;
-
-        const intermediateLegs = pathToLegs(path);
-        if (!intermediateLegs.length) return;
-
-        const uniqueNames = [...new Set(path.map(c => STATIONS.find(s => s.code === c)?.name))];
-        const stopCount = uniqueNames.length - 1;
-        const lineTransfers = intermediateLegs.length - 1;
-        const addedTransfers = (curr.legs.length > 0 ? 1 : 0) + lineTransfers;
-
-        if (curr.transfers + addedTransfers > MAX_TRANSFERS) return;
-
-        const travelMins = (stopCount * MRT_MIN) + (addedTransfers * TRANSFER_PENALTY);
-        const systemAlerts = buildAlerts(intermediateLegs);
-
-        queue.push({
-          type: "mrt",
-          currentCode: targetStation.name,
-          currentName: targetStation.name,
-          lat: targetStation.lat,
-          lng: targetStation.lng,
-          estMins: curr.estMins + travelMins,
-          transfers: curr.transfers + addedTransfers,
-          legs: [...curr.legs, ...intermediateLegs],
-          alerts: [...curr.alerts, ...systemAlerts]
-        });
-      });
-
-      // Transfer Option: Walk from this MRT Station to a nearby Bus Stop
-      const adjacentBusStops = nearbyBusStops(curr.lat, curr.lng);
-      adjacentBusStops.forEach(bs => {
-        if (curr.legs.length > 0 && curr.legs[curr.legs.length - 1].line === "BUS") return;
-
-        const walkTime = bs.d / 80;
-        queue.push({
-          type: "bus",
-          currentCode: bs.code,
-          currentName: bs.name,
-          lat: bs.lat,
-          lng: bs.lng,
-          estMins: curr.estMins + walkTime,
-          transfers: curr.transfers,
-          legs: curr.legs,
-          alerts: curr.alerts
-        });
-      });
+      const path = findPath(curr.id, endStations[0]?.name || UNIQUE_STATIONS[0].name);
+      if (path) {
+        queue.push({ type: "mrt", id: path.slice(-1)[0], lat: 0, lng: 0, estMins: curr.estMins + (path.length * MRT_MIN), transfers: curr.transfers + 1, legs: curr.legs });
+      }
+      // Switch to Bus
+      const nearestBus = startBus[0];
+      if (nearestBus) {
+        queue.push({ type: "bus", id: nearestBus.code, lat: nearestBus.lat, lng: nearestBus.lng, estMins: curr.estMins + TRANSFER_PENALTY, transfers: curr.transfers + 1, legs: curr.legs });
+      }
     }
   }
 
-  // Final pipeline: Sort by travel execution efficiency and clear near-identical duplicate profiles
-  const seenKey = new Set();
-  const dedupedRoutes = [];
-  const sortedRoutes = routes.sort((a, b) => a.estMins - b.estMins || a.transfers - b.transfers);
-
-  for (const r of sortedRoutes) {
-    const signature = `${r.transfers}-${Math.round(r.estMins)}-${r.legs.map(l => l.serviceNo || l.line).join("|")}`;
-    if (!seenKey.has(signature)) {
-      seenKey.add(signature);
-      dedupedRoutes.push(r);
-    }
-  }
-
-  return dedupedRoutes.slice(0, 5);
+  return results;
 }
 
 function NearbyStopPicker({ stops, selectedCoord, onPick }) {
