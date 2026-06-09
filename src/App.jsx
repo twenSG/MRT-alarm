@@ -577,7 +577,7 @@ function BusInputPanel({ onTrack }) {
 
     if (clean.length === 5 && stopMap) {
       const s = stopMap[clean];
-      if (s) { update.coord = { lat:s.lat, lng:s.lng }; update.name = s.name; update.status = "ok"; }
+      if (s) { update.coord = { lat:s[0], lng:s[1] }; update.name = s[2]; update.status = "ok"; }
       else { update.status = "error"; }
       setter(update);
     } else if (clean.length === 6) {
