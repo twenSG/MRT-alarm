@@ -531,6 +531,20 @@ function StationPicker({ label, value, onChange }) {
   );
 }
 
+// ─── NEAR ME BUTTON ──────────────────────────────────────────────────────────
+function NearMeButton({ onFound, style }) {
+  return (
+    <button onClick={() => {
+      if (!navigator.geolocation) return;
+      navigator.geolocation.getCurrentPosition(pos => {
+        onFound({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      }, null, { enableHighAccuracy: true, timeout: 8000 });
+    }} style={{ background:"#1E2D40", border:"1px solid #2D3F55", borderRadius:8, color:"#60A5FA", fontSize:11, fontWeight:700, padding:"5px 10px", cursor:"pointer", ...style }}>
+      📍 Near me
+    </button>
+  );
+}
+
 // ─── BUS COMPONENTS ──────────────────────────────────────────────────────────
 function BusStopField({ label, value, onChange, status, name }) {
   const borderColor = status==="ok"?"#16a34a":status==="error"?"#EF4444":"#1E2D40";
@@ -774,7 +788,16 @@ function BusInputPanel({ onTrack }) {
         Enter a 5-digit bus stop code or 6-digit postal code
         {loadingStops && <span style={{ color:"#F59E0B", marginLeft:6 }}>⏳ Loading stop data…</span>}
       </div>
-      <BusStopField label="From" value={from.value} onChange={v => resolveInput(v, stopMap, "from", setFrom, setFromNearby)} status={from.status} name={from.name} />
+      <div style={{ position:"relative" }}>
+        <BusStopField label="From" value={from.value} onChange={v => resolveInput(v, stopMap, "from", setFrom, setFromNearby)} status={from.status} name={from.name} />
+        <NearMeButton onFound={pos => {
+          const nearby = Object.entries(BUS_STOPS)
+            .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(pos.lat, pos.lng, v[0], v[1]) }))
+            .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 5);
+          setFromNearby(nearby);
+          if (nearby[0]) setFrom(prev => ({ ...prev, value:nearby[0].code, coord:{ lat:nearby[0].lat, lng:nearby[0].lng }, name:nearby[0].name, status:"ok", picked:false }));
+        }} style={{ position:"absolute", right:10, top:18 }} />
+      </div>
       {fromNearby.length > 0 && !from.picked && (
         <div style={{ marginTop:-6, marginBottom:10 }}>
           <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your stop:</div>
@@ -1096,7 +1119,17 @@ function MixedInputPanel({ onTrack }) {
 
   return (
     <>
-      <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from", v)} status={fromStatus} station={fromAddr ? { name: fromAddr } : null} />
+      <div style={{ position:"relative" }}>
+        <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from", v)} status={fromStatus} station={fromAddr ? { name: fromAddr } : null} />
+        <NearMeButton onFound={pos => {
+          const nearby = Object.entries(BUS_STOPS)
+            .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(pos.lat, pos.lng, v[0], v[1]) }))
+            .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 5);
+          setFromNearby(nearby);
+          setFromPicked(false);
+          if (nearby[0]) { setFromCoord({ lat:nearby[0].lat, lng:nearby[0].lng }); setFromAddr(nearby[0].name); setFromPostal(nearby[0].code); setFromStatus("ok"); }
+        }} style={{ position:"absolute", right:10, top:18 }} />
+      </div>
       {fromNearby.length > 0 && !fromPicked && (
         <NearbyStopPicker stops={fromNearby} selectedCoord={fromCoord} onPick={s => { setFromCoord({ lat:s.lat, lng:s.lng }); setFromAddr(s.name); setFromPostal(s.code); setFromPicked(true); setFromNearby([]); }} />
       )}
