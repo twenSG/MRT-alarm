@@ -1007,6 +1007,27 @@ function computeMixedRoutes(oLat, oLng, dLat, dLng) {
   return routes.sort((a, b) => a.transfers - b.transfers || a.estMins - b.estMins).slice(0, 4);
 }
 
+function NearbyStopPicker({ stops, selectedCoord, onPick }) {
+  if (!stops.length) return null;
+  return (
+    <div style={{ marginTop:-6, marginBottom:10 }}>
+      <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your stop:</div>
+      <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+        {stops.map(s => {
+          const active = selectedCoord?.lat === s.lat;
+          return (
+            <button key={s.code} onClick={() => onPick(s)}
+              style={{ background:active?"#0a2a1a":"#161B27", border:`1px solid ${active?"#16a34a":"#1E2D40"}`, borderRadius:9, padding:"8px 12px", color:active?"#4ade80":"#9CA3AF", fontSize:12, cursor:"pointer", textAlign:"left" }}>
+              <span style={{ fontWeight:700, fontFamily:"DM Mono", marginRight:8 }}>{s.code}</span>{s.name}
+              <span style={{ color:"#374151", fontSize:10, marginLeft:6 }}>{Math.round(s.d)}m</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function MixedInputPanel({ onTrack }) {
   const [fromPostal, setFromPostal] = useState("");
   const [toPostal,   setToPostal]   = useState("");
@@ -1016,6 +1037,10 @@ function MixedInputPanel({ onTrack }) {
   const [toCoord,    setToCoord]    = useState(null);
   const [fromAddr,   setFromAddr]   = useState("");
   const [toAddr,     setToAddr]     = useState("");
+  const [fromNearby, setFromNearby] = useState([]);
+  const [toNearby,   setToNearby]   = useState([]);
+  const [fromPicked, setFromPicked] = useState(false);
+  const [toPicked,   setToPicked]   = useState(false);
   const [routes,     setRoutes]     = useState(null);
   const [loading,    setLoading]    = useState(false);
   const [selected,   setSelected]   = useState(null);
@@ -1023,15 +1048,30 @@ function MixedInputPanel({ onTrack }) {
 
   function handlePostal(side, val) {
     const v = val.replace(/\D/g, "").slice(0, 6);
-    if (side === "from") { setFromPostal(v); setFromCoord(null); setFromAddr(""); setFromStatus(v.length === 6 ? "loading" : "idle"); }
-    else                 { setToPostal(v);   setToCoord(null);   setToAddr("");   setToStatus(v.length === 6 ? "loading" : "idle"); }
+    if (side === "from") { setFromPostal(v); setFromCoord(null); setFromAddr(""); setFromNearby([]); setFromPicked(false); setFromStatus(v.length === 6 ? "loading" : "idle"); }
+    else                 { setToPostal(v);   setToCoord(null);   setToAddr("");   setToNearby([]);   setToPicked(false);   setToStatus(v.length === 6 ? "loading" : "idle"); }
     if (v.length !== 6) return;
     clearTimeout(debounce.current[side]);
     debounce.current[side] = setTimeout(async () => {
       try {
         const r = await geocodePostal(v);
-        if (side === "from") { setFromCoord({ lat: r.lat, lng: r.lng }); setFromAddr(r.address); setFromStatus("ok"); }
-        else                 { setToCoord({ lat: r.lat, lng: r.lng });   setToAddr(r.address);   setToStatus("ok"); }
+        const nearby = Object.entries(BUS_STOPS)
+          .map(([code, sv]) => ({ code, lat:sv[0], lng:sv[1], name:sv[2], d:haversineM(r.lat, r.lng, sv[0], sv[1]) }))
+          .filter(s => s.d <= 600).sort((a,b) => a.d - b.d).slice(0, 5);
+        const nearest = nearby[0];
+        if (side === "from") {
+          setFromCoord(nearest ? { lat:nearest.lat, lng:nearest.lng } : { lat:r.lat, lng:r.lng });
+          setFromAddr(nearest ? nearest.name : r.address);
+          setFromNearby(nearby);
+          setFromPicked(false);
+          setFromStatus("ok");
+        } else {
+          setToCoord(nearest ? { lat:nearest.lat, lng:nearest.lng } : { lat:r.lat, lng:r.lng });
+          setToAddr(nearest ? nearest.name : r.address);
+          setToNearby(nearby);
+          setToPicked(false);
+          setToStatus("ok");
+        }
       } catch {
         if (side === "from") setFromStatus("error");
         else setToStatus("error");
@@ -1057,7 +1097,13 @@ function MixedInputPanel({ onTrack }) {
   return (
     <>
       <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from", v)} status={fromStatus} station={fromAddr ? { name: fromAddr } : null} />
+      {fromNearby.length > 0 && !fromPicked && (
+        <NearbyStopPicker stops={fromNearby} selectedCoord={fromCoord} onPick={s => { setFromCoord({ lat:s.lat, lng:s.lng }); setFromAddr(s.name); setFromPicked(true); setFromNearby([]); }} />
+      )}
       <PostalInput label="To (postal code)"   value={toPostal}   onChange={v => handlePostal("to",   v)} status={toStatus}   station={toAddr   ? { name: toAddr }   : null} />
+      {toNearby.length > 0 && !toPicked && (
+        <NearbyStopPicker stops={toNearby} selectedCoord={toCoord} onPick={s => { setToCoord({ lat:s.lat, lng:s.lng }); setToAddr(s.name); setToPicked(true); setToNearby([]); }} />
+      )}
 
       <button disabled={!fromCoord || !toCoord || loading} onClick={search}
         style={{ width:"100%", padding:"13px", borderRadius:12, border:"none", background:fromCoord&&toCoord&&!loading?"#2563EB":"#1E2D40", color:fromCoord&&toCoord&&!loading?"#fff":"#374151", fontSize:14, fontWeight:800, cursor:fromCoord&&toCoord&&!loading?"pointer":"not-allowed" }}>
