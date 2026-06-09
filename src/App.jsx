@@ -597,31 +597,37 @@ function BusInputPanel({ onTrack }) {
 
     setTimeout(() => {
       try {
-        const RADIUS_M = 600;
         const BUS_MIN = 3;
+        const NEARBY_M = 400; // for postal code mode — find stops near the coord
 
-        const originStops = Object.entries(BUS_STOPS)
-          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(from.coord.lat, from.coord.lng, v[0], v[1]) }))
-          .filter(s => s.d <= RADIUS_M).sort((a,b) => a.d - b.d).slice(0, 30);
+        // Resolve origin stop codes: if user typed a stop code use it directly,
+        // otherwise find stops near the postal code coordinate
+        const getStopCodes = (field) => {
+          if (field.value.length === 5 && BUS_STOPS[field.value]) {
+            return [field.value]; // exact stop code entered
+          }
+          // postal code — find nearby stops
+          return Object.entries(BUS_STOPS)
+            .map(([code, v]) => ({ code, d: haversineM(field.coord.lat, field.coord.lng, v[0], v[1]) }))
+            .filter(s => s.d <= NEARBY_M)
+            .sort((a, b) => a.d - b.d)
+            .slice(0, 10)
+            .map(s => s.code);
+        };
 
-        const destStops = Object.entries(BUS_STOPS)
-          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(to.coord.lat, to.coord.lng, v[0], v[1]) }))
-          .filter(s => s.d <= RADIUS_M).sort((a,b) => a.d - b.d).slice(0, 30);
+        const originCodes = new Set(getStopCodes(from));
+        const destCodes   = new Set(getStopCodes(to));
 
-        console.log(`BUS_STOPS size: ${Object.keys(BUS_STOPS).length}, BUS_ROUTES size: ${Object.keys(BUS_ROUTES).length}`);
-        console.log(`Origin stops found: ${originStops.length}`, originStops.slice(0,3).map(s => s.code + ' ' + s.name));
-        console.log(`Dest stops found: ${destStops.length}`, destStops.slice(0,3).map(s => s.code + ' ' + s.name));
-
-        if (!originStops.length || !destStops.length) {
+        if (!originCodes.size || !destCodes.size) {
           setRoutes({ list:[], nearbyBoard:[], nearbyAlight:[] });
           setLoading(false);
           return;
         }
 
-        const originCodes = new Set(originStops.map(s => s.code));
-        const destCodes   = new Set(destStops.map(s => s.code));
         const found = [];
 
+        // For each route, check if it passes through an origin stop
+        // then later passes through a destination stop
         for (const [key, stops] of Object.entries(BUS_ROUTES)) {
           const [serviceNo] = key.split("_");
           let oIdx = -1, dIdx = -1;
@@ -633,7 +639,7 @@ function BusInputPanel({ onTrack }) {
             const fv = BUS_STOPS[stops[oIdx]], tv = BUS_STOPS[stops[dIdx]];
             if (!fv || !tv) continue;
             const stopCount = dIdx - oIdx;
-            const legStops = stops.slice(oIdx, dIdx+1).map(c => {
+            const legStops = stops.slice(oIdx, dIdx + 1).map(c => {
               const sv = BUS_STOPS[c];
               return sv ? { code:c, lat:sv[0], lng:sv[1], name:sv[2] } : { code:c, lat:0, lng:0, name:c };
             });
@@ -646,11 +652,21 @@ function BusInputPanel({ onTrack }) {
           }
         }
 
+        // Deduplicate by serviceNo keeping shortest trip
         const seen = new Map();
-        for (const r of found.sort((a,b) => a.estMins - b.estMins)) {
+        for (const r of found.sort((a, b) => a.estMins - b.estMins)) {
           if (!seen.has(r.serviceNo)) seen.set(r.serviceNo, r);
         }
-        setRoutes({ list:Array.from(seen.values()).slice(0,8), nearbyBoard:originStops.slice(0,6), nearbyAlight:destStops.slice(0,6) });
+
+        // Nearby stops for the swap UI on confirm screen
+        const nearbyBoard  = Object.entries(BUS_STOPS)
+          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(from.coord.lat, from.coord.lng, v[0], v[1]) }))
+          .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 6);
+        const nearbyAlight = Object.entries(BUS_STOPS)
+          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(to.coord.lat, to.coord.lng, v[0], v[1]) }))
+          .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 6);
+
+        setRoutes({ list: Array.from(seen.values()).slice(0, 8), nearbyBoard, nearbyAlight });
       } catch(e) {
         console.error(e);
         setRoutes({ list:[], nearbyBoard:[], nearbyAlight:[] });
