@@ -444,12 +444,12 @@ function MissedPanel({ alerts, firedCount, onDismiss }) {
   );
 }
 
-function PostalInput({ label, value, onChange, status, station }) {
+function PostalInput({ label, value, onChange, status, station, extra }) {
   const color = status==="ok"?"#009645":status==="error"?"#DC2626":status==="loading"?"#F59E0B":"#1E2D40";
   return (
     <div style={{ marginBottom:12 }}>
       <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:6 }}>{label}</div>
-      <button style={{ width:"100%", background:"#161B27", borderRadius:14, border:`1.5px solid ${color}`, transition:"border-color .2s", padding:"14px 16px", display:"flex", alignItems:"center", gap:10, cursor:"text", textAlign:"left", position:"relative" }}
+      <div style={{ background:"#161B27", borderRadius:14, border:`1.5px solid ${color}`, transition:"border-color .2s", padding:"14px 16px", display:"flex", alignItems:"center", gap:10, cursor:"text" }}
         onClick={e => e.currentTarget.querySelector("input").focus()}>
         <span style={{ fontSize:16 }}>{status==="ok"?"✅":status==="loading"?"⏳":status==="error"?"❌":"📍"}</span>
         <input
@@ -457,7 +457,8 @@ function PostalInput({ label, value, onChange, status, station }) {
           value={value} onChange={e => onChange(e.target.value.replace(/\D/g,"").slice(0,6))}
           style={{ flex:1, background:"transparent", border:"none", color:value?"#fff":"#374151", fontSize:15, fontWeight:value?700:400, padding:0, fontFamily:"'DM Sans', -apple-system, sans-serif", letterSpacing:"normal", outline:"none" }}
         />
-      </button>
+        {extra && <div onClick={e => e.stopPropagation()}>{extra}</div>}
+      </div>
       {station && <div style={{ color:"#009645", fontSize:12, marginTop:5, paddingLeft:4 }}>→ Nearest: <b>{station.name}</b></div>}
       {status==="error" && <div style={{ color:"#DC2626", fontSize:12, marginTop:5, paddingLeft:4 }}>Postal code not found</div>}
     </div>
@@ -466,7 +467,7 @@ function PostalInput({ label, value, onChange, status, station }) {
 
 const LINE_ORDER = ["NSL","EWL","NEL","CCL","DTL","TEL"];
 
-function StationPicker({ label, value, onChange }) {
+function StationPicker({ label, value, onChange, extra }) {
   const [query, setQuery] = useState("");
   const [lineFilter, setLineFilter] = useState(null);
   const [open, setOpen] = useState(false);
@@ -492,6 +493,7 @@ function StationPicker({ label, value, onChange }) {
             <div style={{ display:"flex", gap:4, marginTop:3, flexWrap:"wrap" }}>{value.lines.filter(l => LINE_META[l]).map(l => <LinePill key={l} line={l} small />)}</div>
           </div>
         ) : <span style={{ color:"#374151", fontSize:14, flex:1 }}>Select a station…</span>}
+        {extra && <div onClick={e => e.stopPropagation()}>{extra}</div>}
         <span style={{ color:"#374151", fontSize:12 }}>▾</span>
       </button>
       {open && (
@@ -547,7 +549,7 @@ function NearMeButton({ onFound, style }) {
 }
 
 // ─── BUS COMPONENTS ──────────────────────────────────────────────────────────
-function BusStopField({ label, value, onChange, status, name }) {
+function BusStopField({ label, value, onChange, status, name, extra }) {
   const borderColor = status==="ok"?"#16a34a":status==="error"?"#EF4444":"#1E2D40";
   const icon = status==="ok"?"✅":status==="error"?"❌":status==="loading"?"⏳":"🚏";
   return (
@@ -562,6 +564,7 @@ function BusStopField({ label, value, onChange, status, name }) {
           value={value} onChange={e => onChange(e.target.value.replace(/\D/g,"").slice(0,6))}
           style={{ flex:1, background:"transparent", border:"none", color:value?"#fff":"#374151", fontSize:15, fontWeight:value?700:400, padding:0, fontFamily:"'DM Sans', -apple-system, sans-serif", letterSpacing:"normal", outline:"none" }}
         />
+        {extra && <div onClick={e => e.stopPropagation()}>{extra}</div>}
       </div>
       {status==="ok" && name && <div style={{ color:"#4ade80", fontSize:12, marginTop:4, paddingLeft:4 }}>{name}</div>}
       {status==="error" && <div style={{ color:"#EF4444", fontSize:12, marginTop:4, paddingLeft:4 }}>Stop not found</div>}
@@ -786,20 +789,15 @@ function BusInputPanel({ onTrack }) {
   const canSearch = from.status==="ok" && to.status==="ok";
   return (
     <>
-      <div style={{ color:"#374151", fontSize:12, marginBottom:10 }}>
-        Enter a 5-digit bus stop code or 6-digit postal code
-        {loadingStops && <span style={{ color:"#F59E0B", marginLeft:6 }}>⏳ Loading stop data…</span>}
-      </div>
-      <div style={{ position:"relative" }}>
-        <BusStopField label="From" value={from.value} onChange={v => resolveInput(v, stopMap, "from", setFrom, setFromNearby)} status={from.status} name={from.name} />
-        <NearMeButton onFound={pos => {
+      {loadingStops && <div style={{ color:"#F59E0B", fontSize:12, marginBottom:10 }}>⏳ Loading stop data…</div>}
+      <BusStopField label="From" value={from.value} onChange={v => resolveInput(v, stopMap, "from", setFrom, setFromNearby)} status={from.status} name={from.name}
+        extra={<NearMeButton onFound={pos => {
           const nearby = Object.entries(BUS_STOPS)
             .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(pos.lat, pos.lng, v[0], v[1]) }))
             .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 3);
           setFromNearby(nearby);
           if (nearby[0]) setFrom(prev => ({ ...prev, value:nearby[0].code, coord:{ lat:nearby[0].lat, lng:nearby[0].lng }, name:nearby[0].name, status:"ok", picked:false }));
-        }} style={{ position:"absolute", right:10, top:18 }} />
-      </div>
+        }} />} />
       {fromNearby.length > 0 && !from.picked && (
         <div style={{ marginTop:-6, marginBottom:10 }}>
           <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your stop:</div>
@@ -1121,17 +1119,15 @@ function MixedInputPanel({ onTrack }) {
 
   return (
     <>
-      <div style={{ position:"relative" }}>
-        <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from", v)} status={fromStatus} station={fromAddr ? { name: fromAddr } : null} />
-        <NearMeButton onFound={pos => {
+      <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from", v)} status={fromStatus} station={fromAddr ? { name: fromAddr } : null}
+        extra={<NearMeButton onFound={pos => {
           const nearby = Object.entries(BUS_STOPS)
             .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(pos.lat, pos.lng, v[0], v[1]) }))
             .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 3);
           setFromNearby(nearby);
           setFromPicked(false);
           if (nearby[0]) { setFromCoord({ lat:nearby[0].lat, lng:nearby[0].lng }); setFromAddr(nearby[0].name); setFromPostal(nearby[0].code); setFromStatus("ok"); }
-        }} style={{ position:"absolute", right:10, top:18 }} />
-      </div>
+        }} />} />
       {fromNearby.length > 0 && !fromPicked && (
         <NearbyStopPicker stops={fromNearby} selectedCoord={fromCoord} onPick={s => { setFromCoord({ lat:s.lat, lng:s.lng }); setFromAddr(s.name); setFromPostal(s.code); setFromPicked(true); setFromNearby([]); }} />
       )}
@@ -1420,10 +1416,8 @@ export default function App() {
             {/* Postal mode (hidden tab - accessible via station picker still but keeping for backwards compat) */}
             {inputMode === "postal" && (
               <>
-                <div style={{ position:"relative" }}>
-                  <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from",v)} status={fromStatus} station={fromStation} />
-                  <NearMeBtn onFound={st => { setFromStation(st); setFromStatus("ok"); setRouteError(null); }} style={{ position:"absolute", right:10, top:18 }} />
-                </div>
+                <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from",v)} status={fromStatus} station={fromStation}
+                  extra={<NearMeBtn onFound={st => { setFromStation(st); setFromStatus("ok"); setRouteError(null); }} />} />
                 <PostalInput label="To (postal code)" value={toPostal} onChange={v => handlePostal("to",v)} status={toStatus} station={toStation} />
               </>
             )}
