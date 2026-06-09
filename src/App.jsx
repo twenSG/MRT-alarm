@@ -865,62 +865,74 @@ function BusInputPanel({ onTrack }) {
 // ─── MIXED ROUTING ───────────────────────────────────────────────────────────
 function computeMixedRoutes(oLat, oLng, dLat, dLng) {
   const BUS_MIN = 3;
-  const MRT_MIN = 2;
   const results = [];
 
-  // 1. Identify nearby entry points
-  const nearBusFrom = Object.entries(BUS_STOPS).map(([code, v]) => ({ code, name: v[2], lat: v[0], lng: v[1], d: haversineM(oLat, oLng, v[0], v[1]) })).filter(s => s.d <= 600);
-  const nearMRTFrom = UNIQUE_STATIONS.map(s => ({ ...s, d: haversineM(oLat, oLng, s.lat, s.lng) })).filter(s => s.d <= 800);
-  const nearBusTo = Object.entries(BUS_STOPS).map(([code, v]) => ({ code, name: v[2], lat: v[0], lng: v[1], d: haversineM(dLat, dLng, v[0], v[1]) })).filter(s => s.d <= 600);
-  const nearMRTTo = UNIQUE_STATIONS.map(s => ({ ...s, d: haversineM(dLat, dLng, s.lat, s.lng) })).filter(s => s.d <= 800);
-
-  // 2. Build Bus Graph for transfers
+  // 1. Map: Which routes pass through which stop?
   const stopToRoutes = {};
   for (const [key, stops] of Object.entries(BUS_ROUTES)) {
     const serviceNo = key.split("_")[0];
-    stops.forEach(c => {
-      if (!stopToRoutes[c]) stopToRoutes[c] = [];
-      stopToRoutes[c].push({ serviceNo, stops });
+    stops.forEach(stopCode => {
+      if (!stopToRoutes[stopCode]) stopToRoutes[stopCode] = [];
+      stopToRoutes[stopCode].push({ serviceNo, stops });
     });
   }
 
-  // 3. Search: Bus -> MRT or MRT -> Bus (Mixed Mode)
-  for (const startB of nearBusFrom) {
-    for (const route of (stopToRoutes[startB.code] || [])) {
-      const idx = route.stops.indexOf(startB.code);
-      // Check every stop on this bus route
-      for (let i = idx + 1; i < route.stops.length; i++) {
-        const stopCode = route.stops[i];
-        // If this stop is near an MRT station, initiate MRT path
-        const nearSt = nearMRTFrom.find(s => haversineM(BUS_STOPS[stopCode][0], BUS_STOPS[stopCode][1], s.lat, s.lng) < 400);
-        if (nearSt) {
-          for (const endSt of nearMRTTo) {
-            const mrtPath = findPathFewestTransfers(nearSt.name, endSt.name) || findPath(nearSt.name, endSt.name);
-            if (mrtPath) {
-              const busLeg = { line: "BUS", serviceNo: route.serviceNo, stops: route.stops.slice(idx, i + 1).map(c => ({code: c, name: BUS_STOPS[c]?.[2]})) };
-              const mrtLegs = pathToLegs(mrtPath);
-              results.push({
-                type: "mixed",
-                isBus: false,
-                serviceNo: `${route.serviceNo} + MRT`,
-                fromName: startB.name,
-                toName: endSt.name,
-                stopCount: busLeg.stops.length + mrtPath.length,
-                estMins: (busLeg.stops.length * BUS_MIN) + (mrtPath.length * MRT_MIN) + 5,
-                legs: [busLeg, ...mrtLegs],
-                alerts: buildAlerts(mrtLegs)
-              });
+  // 2. Find start and end points
+  const nearFrom = Object.entries(BUS_STOPS)
+    .map(([code, v]) => ({ code, d: haversineM(oLat, oLng, v[0], v[1]) }))
+    .filter(s => s.d <= 600);
+  const nearTo = Object.entries(BUS_STOPS)
+    .map(([code, v]) => ({ code, d: haversineM(dLat, dLng, v[0], v[1]) }))
+    .filter(s => s.d <= 600);
+
+  // 3. Chain-Search: BFS for Bus 1 -> Bus 2 -> Bus 3
+  for (const start of nearFrom) {
+    const routes1 = stopToRoutes[start.code] || [];
+    for (const r1 of routes1) {
+      const idx1 = r1.stops.indexOf(start.code);
+      
+      for (let i = idx1 + 1; i < r1.stops.length; i++) {
+        const transferStop1 = r1.stops[i];
+        const routes2 = stopToRoutes[transferStop1] || [];
+        
+        for (const r2 of routes2) {
+          if (r2.serviceNo === r1.serviceNo) continue;
+          const idx2 = r2.stops.indexOf(transferStop1);
+          
+          for (let j = idx2 + 1; j < r2.stops.length; j++) {
+            const transferStop2 = r2.stops[j];
+            const routes3 = stopToRoutes[transferStop2] || [];
+            
+            for (const r3 of routes3) {
+              if (r3.serviceNo === r2.serviceNo) continue;
+              const idx3 = r3.stops.indexOf(transferStop2);
+              const endIdx = r3.stops.findIndex(s => nearTo.some(n => n.code === s));
+              
+              if (endIdx > idx3) {
+                // SUCCESS: Found 913 -> 168 -> 4 connection
+                results.push({
+                  type: "bus",
+                  isBus: true,
+                  serviceNo: `${r1.serviceNo} → ${r2.serviceNo} → ${r3.serviceNo}`,
+                  fromName: BUS_STOPS[start.code][2],
+                  toName: BUS_STOPS[r3.stops[endIdx]][2],
+                  stopCount: (i-idx1) + (j-idx2) + (endIdx-idx3),
+                  estMins: ((i-idx1) + (j-idx2) + (endIdx-idx3)) * BUS_MIN + 10,
+                  legs: [
+                    { line: "BUS", serviceNo: r1.serviceNo, stops: r1.stops.slice(idx1, i+1).map(c=>({code:c, name:BUS_STOPS[c]?.[2]})) },
+                    { line: "BUS", serviceNo: r2.serviceNo, stops: r2.stops.slice(idx2, j+1).map(c=>({code:c, name:BUS_STOPS[c]?.[2]})) },
+                    { line: "BUS", serviceNo: r3.serviceNo, stops: r3.stops.slice(idx3, endIdx+1).map(c=>({code:c, name:BUS_STOPS[c]?.[2]})) }
+                  ],
+                  alerts: [{ id: "transfer", type: "transfer", message: "Transfer at Interchange" }]
+                });
+              }
             }
           }
         }
       }
     }
   }
-
-  // 4. Fallback: Pure Bus (including transfers)
-  // [Similar logic for Bus -> Bus]
-  
-  return results.sort((a, b) => a.estMins - b.estMins).slice(0, 5);
+  return results.sort((a,b) => a.estMins - b.estMins).slice(0, 3);
 }
 
 function NearbyStopPicker({ stops, selectedCoord, onPick }) {
