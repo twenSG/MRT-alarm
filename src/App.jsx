@@ -864,42 +864,67 @@ function BusInputPanel({ onTrack }) {
 
 // ─── MIXED ROUTING ───────────────────────────────────────────────────────────
 function computeMixedRoutes(oLat, oLng, dLat, dLng) {
-  const results = [];
   const BUS_MIN = 3;
   const MRT_MIN = 2;
+  const results = [];
 
-  // 1. Bus Search
-  const nearBusFrom = Object.entries(BUS_STOPS).map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(oLat, oLng, v[0], v[1]) })).filter(s => s.d <= 600);
-  const nearBusTo = Object.entries(BUS_STOPS).map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(dLat, dLng, v[0], v[1]) })).filter(s => s.d <= 600);
+  // 1. Build a "Stop to Routes" map for transfer detection
+  const stopToRoutes = {};
+  for (const [key, stops] of Object.entries(BUS_ROUTES)) {
+    const serviceNo = key.split("_")[0];
+    stops.forEach(stopCode => {
+      if (!stopToRoutes[stopCode]) stopToRoutes[stopCode] = [];
+      stopToRoutes[stopCode].push({ serviceNo, stops });
+    });
+  }
 
-  for (const start of nearBusFrom) {
-    for (const end of nearBusTo) {
-      for (const [key, stops] of Object.entries(BUS_ROUTES)) {
-        const oIdx = stops.indexOf(start.code);
-        const dIdx = stops.indexOf(end.code);
-        if (oIdx !== -1 && dIdx !== -1 && dIdx > oIdx) {
-          const serviceNo = key.split("_")[0];
-          const legStops = stops.slice(oIdx, dIdx + 1).map(c => ({code:c, name:BUS_STOPS[c]?.[2]||c}));
-          results.push({
-            type: "bus",
-            isBus: true,
-            serviceNo: serviceNo,
-            fromName: start.name,
-            toName: end.name,
-            stopCount: dIdx - oIdx,
-            estMins: (dIdx - oIdx) * BUS_MIN,
-            legs: [{ line: "BUS", serviceNo, stops: legStops }],
-            alerts: [{ id: "alight-bus", type: "alight", stopCode: end.code, stopName: end.name, lat: end.lat, lng: end.lng }]
-          });
+  // 2. Identify start and end stops (within walking distance)
+  const nearFrom = Object.entries(BUS_STOPS)
+    .map(([code, v]) => ({ code, name: v[2], d: haversineM(oLat, oLng, v[0], v[1]) }))
+    .filter(s => s.d <= 600);
+  const nearTo = Object.entries(BUS_STOPS)
+    .map(([code, v]) => ({ code, name: v[2], d: haversineM(dLat, dLng, v[0], v[1]) }))
+    .filter(s => s.d <= 600);
+
+  // 3. Search: Find connections (Bus -> Bus)
+  for (const start of nearFrom) {
+    for (const route1 of (stopToRoutes[start.code] || [])) {
+      const idx1 = route1.stops.indexOf(start.code);
+      
+      // Look for a transfer point (a stop where another route intersects)
+      for (let i = idx1 + 1; i < route1.stops.length; i++) {
+        const transferStop = route1.stops[i];
+        
+        for (const route2 of (stopToRoutes[transferStop] || [])) {
+          if (route2.serviceNo === route1.serviceNo) continue;
+          
+          const idx2 = route2.stops.indexOf(transferStop);
+          const endIdx = route2.stops.findIndex(s => nearTo.some(n => n.code === s));
+          
+          if (endIdx > idx2) {
+            results.push({
+              type: "bus",
+              isBus: true,
+              serviceNo: `${route1.serviceNo} ➔ ${route2.serviceNo}`,
+              fromName: start.name,
+              toName: BUS_STOPS[route2.stops[endIdx]][2],
+              stopCount: (i - idx1) + (endIdx - idx2),
+              estMins: ((i - idx1) + (endIdx - idx2)) * BUS_MIN + 5,
+              legs: [
+                { line: "BUS", serviceNo: route1.serviceNo, stops: route1.stops.slice(idx1, i + 1).map(c => ({code: c, name: BUS_STOPS[c]?.[2]})) },
+                { line: "BUS", serviceNo: route2.serviceNo, stops: route2.stops.slice(idx2, endIdx + 1).map(c => ({code: c, name: BUS_STOPS[c]?.[2]})) }
+              ],
+              alerts: [{ id: "transfer", type: "transfer", stopName: BUS_STOPS[transferStop][2], message: `Transfer at ${BUS_STOPS[transferStop][2]}` }]
+            });
+          }
         }
       }
     }
   }
 
-  // 2. MRT Search
+  // 4. Fallback: Add simple MRT search if no bus routes are found
   const startSt = UNIQUE_STATIONS.map(s => ({...s, d: haversineM(oLat, oLng, s.lat, s.lng)})).sort((a,b) => a.d-b.d)[0];
   const endSt = UNIQUE_STATIONS.map(s => ({...s, d: haversineM(dLat, dLng, s.lat, s.lng)})).sort((a,b) => a.d-b.d)[0];
-  
   if (startSt && endSt) {
     const path = findPathFewestTransfers(startSt.name, endSt.name) || findPath(startSt.name, endSt.name);
     if (path) {
@@ -917,8 +942,7 @@ function computeMixedRoutes(oLat, oLng, dLat, dLng) {
     }
   }
 
-  // Filter out any duplicates and return the cleanest 4 options
-  return results.sort((a, b) => a.estMins - b.estMins).slice(0, 4);
+  return results.sort((a, b) => a.estMins - b.estMins).slice(0, 5);
 }
 
 function NearbyStopPicker({ stops, selectedCoord, onPick }) {
