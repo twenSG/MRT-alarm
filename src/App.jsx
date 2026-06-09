@@ -637,15 +637,16 @@ function BusInputPanel({ onTrack }) {
         const BUS_MIN = 3;
         const NEARBY_M = 400; // for postal code mode — find stops near the coord
 
-        // Resolve origin stop codes: if user typed a stop code use it directly,
-        // otherwise find stops near the postal code coordinate
+        // Always search all nearby stops around the coord (400m radius)
+        // This ensures both sides of the road are included even if user picked one
         const getStopCodes = (field) => {
-          if (field.value.length === 5 && BUS_STOPS[field.value]) {
-            return [field.value]; // exact stop code entered
+          if (field.value.length === 5 && !field.coord) {
+            return [field.value]; // raw stop code with no coord — use directly
           }
-          // postal code — find nearby stops
+          // Use coord (from postal or picked stop) to find all nearby stops
+          const lat = field.coord.lat, lng = field.coord.lng;
           return Object.entries(BUS_STOPS)
-            .map(([code, v]) => ({ code, d: haversineM(field.coord.lat, field.coord.lng, v[0], v[1]) }))
+            .map(([code, v]) => ({ code, d: haversineM(lat, lng, v[0], v[1]) }))
             .filter(s => s.d <= NEARBY_M)
             .sort((a, b) => a.d - b.d)
             .slice(0, 10)
@@ -689,18 +690,12 @@ function BusInputPanel({ onTrack }) {
           }
         }
 
-        // Keep both directions if they differ significantly (>3 stops apart)
-        // This lets user see e.g. "913 (8 stops)" vs "913 (21 stops)" and pick
-        const seen = new Map();
+        // Deduplicate by exact from+to stop pair so both directions show
+        const seenKey = new Set();
+        const dedupedRoutes = [];
         for (const r of found.sort((a, b) => a.estMins - b.estMins)) {
-          const existing = seen.get(r.serviceNo);
-          if (!existing) {
-            seen.set(r.serviceNo, r);
-          } else if (r.stopCount < existing.stopCount - 3) {
-            // This direction is significantly shorter — replace
-            seen.set(r.serviceNo, r);
-          }
-          // Otherwise skip — same service, similar length
+          const key = r.serviceNo + "|" + r.from.code + "|" + r.to.code;
+          if (!seenKey.has(key)) { seenKey.add(key); dedupedRoutes.push(r); }
         }
 
         // Nearby stops for the swap UI on confirm screen
@@ -712,8 +707,7 @@ function BusInputPanel({ onTrack }) {
           .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 3);
 
         // Show both directions of the same service so user can pick the right one
-        const allRoutes = found.sort((a, b) => a.estMins - b.estMins).slice(0, 8);
-        setRoutes({ list: allRoutes, nearbyBoard, nearbyAlight });
+        setRoutes({ list: dedupedRoutes.slice(0, 8), nearbyBoard, nearbyAlight });
       } catch(e) {
         console.error(e);
         setRoutes({ list:[], nearbyBoard:[], nearbyAlight:[] });
@@ -804,35 +798,9 @@ function BusInputPanel({ onTrack }) {
           setFromNearby(nearby);
           if (nearby[0]) setFrom(prev => ({ ...prev, value:nearby[0].code, coord:{ lat:nearby[0].lat, lng:nearby[0].lng }, name:nearby[0].name, status:"ok", picked:false }));
         }} />} />
-      {fromNearby.length > 0 && !from.picked && (
-        <div style={{ marginTop:-6, marginBottom:10 }}>
-          <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your stop:</div>
-          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-            {fromNearby.map(s => (
-              <button key={s.code} onClick={() => { setFrom(prev => ({ ...prev, value:s.code, coord:{ lat:s.lat, lng:s.lng }, name:s.name, picked:true })); setFromNearby([]); }}
-                style={{ background:from.coord?.lat===s.lat?"#0a2a1a":"#161B27", border:`1px solid ${from.coord?.lat===s.lat?"#16a34a":"#1E2D40"}`, borderRadius:9, padding:"8px 12px", color:from.coord?.lat===s.lat?"#4ade80":"#9CA3AF", fontSize:12, cursor:"pointer", textAlign:"left" }}>
-                <span style={{ fontWeight:700, fontFamily:"DM Mono", marginRight:8 }}>{s.code}</span>{s.name}
-                <span style={{ color:"#374151", fontSize:10, marginLeft:6 }}>{Math.round(s.d)}m</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+
       <BusStopField label="To"   value={to.value}   onChange={v => resolveInput(v, stopMap, "to",   setTo,   setToNearby)}   status={to.status}   name={to.name}   />
-      {toNearby.length > 0 && !to.picked && (
-        <div style={{ marginTop:-6, marginBottom:10 }}>
-          <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your stop:</div>
-          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-            {toNearby.map(s => (
-              <button key={s.code} onClick={() => { setTo(prev => ({ ...prev, value:s.code, coord:{ lat:s.lat, lng:s.lng }, name:s.name, picked:true })); setToNearby([]); }}
-                style={{ background:to.coord?.lat===s.lat?"#0a2a1a":"#161B27", border:`1px solid ${to.coord?.lat===s.lat?"#16a34a":"#1E2D40"}`, borderRadius:9, padding:"8px 12px", color:to.coord?.lat===s.lat?"#4ade80":"#9CA3AF", fontSize:12, cursor:"pointer", textAlign:"left" }}>
-                <span style={{ fontWeight:700, fontFamily:"DM Mono", marginRight:8 }}>{s.code}</span>{s.name}
-                <span style={{ color:"#374151", fontSize:10, marginLeft:6 }}>{Math.round(s.d)}m</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+
 
       <button disabled={!canSearch||loading} onClick={findRoutes}
         style={{ width:"100%", padding:"13px", borderRadius:12, border:"none", background:canSearch&&!loading?"#2563EB":"#1E2D40", color:canSearch&&!loading?"#fff":"#374151", fontSize:14, fontWeight:800, cursor:canSearch&&!loading?"pointer":"not-allowed" }}>
