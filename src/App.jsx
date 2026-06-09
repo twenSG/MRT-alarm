@@ -564,7 +564,7 @@ function BusInputPanel({ onTrack }) {
   // Load stop map once
   useEffect(() => {
     setLoadingStops(true);
-    fetch("/api/bus-data").then(r => r.json()).then(d => { setStopMap(d.stopMap); setLoadingStops(false); }).catch(() => setLoadingStops(false));
+    fetch("/api/bus-stops").then(r => r.json()).then(d => { setStopMap(d); setLoadingStops(false); }).catch(() => setLoadingStops(false));
   }, []);
 
   function resolveInput(val, stopMap, side, setter) {
