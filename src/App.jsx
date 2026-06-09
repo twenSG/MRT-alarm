@@ -608,6 +608,10 @@ function BusInputPanel({ onTrack }) {
           .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(to.coord.lat, to.coord.lng, v[0], v[1]) }))
           .filter(s => s.d <= RADIUS_M).sort((a,b) => a.d - b.d).slice(0, 30);
 
+        console.log(`BUS_STOPS size: ${Object.keys(BUS_STOPS).length}, BUS_ROUTES size: ${Object.keys(BUS_ROUTES).length}`);
+        console.log(`Origin stops found: ${originStops.length}`, originStops.slice(0,3).map(s => s.code + ' ' + s.name));
+        console.log(`Dest stops found: ${destStops.length}`, destStops.slice(0,3).map(s => s.code + ' ' + s.name));
+
         if (!originStops.length || !destStops.length) {
           setRoutes({ list:[], nearbyBoard:[], nearbyAlight:[] });
           setLoading(false);
