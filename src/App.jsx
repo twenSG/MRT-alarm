@@ -780,7 +780,7 @@ function BusInputPanel({ onTrack }) {
           <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your stop:</div>
           <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
             {fromNearby.map(s => (
-              <button key={s.code} onClick={() => { setFrom(prev => ({ ...prev, coord:{ lat:s.lat, lng:s.lng }, name:s.name, picked:true })); setFromNearby([]); }}
+              <button key={s.code} onClick={() => { setFrom(prev => ({ ...prev, value:s.code, coord:{ lat:s.lat, lng:s.lng }, name:s.name, picked:true })); setFromNearby([]); }}
                 style={{ background:from.coord?.lat===s.lat?"#0a2a1a":"#161B27", border:`1px solid ${from.coord?.lat===s.lat?"#16a34a":"#1E2D40"}`, borderRadius:9, padding:"8px 12px", color:from.coord?.lat===s.lat?"#4ade80":"#9CA3AF", fontSize:12, cursor:"pointer", textAlign:"left" }}>
                 <span style={{ fontWeight:700, fontFamily:"DM Mono", marginRight:8 }}>{s.code}</span>{s.name}
                 <span style={{ color:"#374151", fontSize:10, marginLeft:6 }}>{Math.round(s.d)}m</span>
@@ -795,7 +795,7 @@ function BusInputPanel({ onTrack }) {
           <div style={{ color:"#374151", fontSize:11, marginBottom:5 }}>Tap your stop:</div>
           <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
             {toNearby.map(s => (
-              <button key={s.code} onClick={() => { setTo(prev => ({ ...prev, coord:{ lat:s.lat, lng:s.lng }, name:s.name, picked:true })); setToNearby([]); }}
+              <button key={s.code} onClick={() => { setTo(prev => ({ ...prev, value:s.code, coord:{ lat:s.lat, lng:s.lng }, name:s.name, picked:true })); setToNearby([]); }}
                 style={{ background:to.coord?.lat===s.lat?"#0a2a1a":"#161B27", border:`1px solid ${to.coord?.lat===s.lat?"#16a34a":"#1E2D40"}`, borderRadius:9, padding:"8px 12px", color:to.coord?.lat===s.lat?"#4ade80":"#9CA3AF", fontSize:12, cursor:"pointer", textAlign:"left" }}>
                 <span style={{ fontWeight:700, fontFamily:"DM Mono", marginRight:8 }}>{s.code}</span>{s.name}
                 <span style={{ color:"#374151", fontSize:10, marginLeft:6 }}>{Math.round(s.d)}m</span>
@@ -1098,11 +1098,11 @@ function MixedInputPanel({ onTrack }) {
     <>
       <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from", v)} status={fromStatus} station={fromAddr ? { name: fromAddr } : null} />
       {fromNearby.length > 0 && !fromPicked && (
-        <NearbyStopPicker stops={fromNearby} selectedCoord={fromCoord} onPick={s => { setFromCoord({ lat:s.lat, lng:s.lng }); setFromAddr(s.name); setFromPicked(true); setFromNearby([]); }} />
+        <NearbyStopPicker stops={fromNearby} selectedCoord={fromCoord} onPick={s => { setFromCoord({ lat:s.lat, lng:s.lng }); setFromAddr(s.name); setFromPostal(s.code); setFromPicked(true); setFromNearby([]); }} />
       )}
       <PostalInput label="To (postal code)"   value={toPostal}   onChange={v => handlePostal("to",   v)} status={toStatus}   station={toAddr   ? { name: toAddr }   : null} />
       {toNearby.length > 0 && !toPicked && (
-        <NearbyStopPicker stops={toNearby} selectedCoord={toCoord} onPick={s => { setToCoord({ lat:s.lat, lng:s.lng }); setToAddr(s.name); setToPicked(true); setToNearby([]); }} />
+        <NearbyStopPicker stops={toNearby} selectedCoord={toCoord} onPick={s => { setToCoord({ lat:s.lat, lng:s.lng }); setToAddr(s.name); setToPostal(s.code); setToPicked(true); setToNearby([]); }} />
       )}
 
       <button disabled={!fromCoord || !toCoord || loading} onClick={search}
