@@ -680,21 +680,27 @@ function BusInputPanel({ onTrack }) {
             }
           }
           if (oIdx === -1 || !candidateDest.length) continue;
-          // Pick the candidate closest to the destination coord
-          const best = candidateDest.sort((a, b) => a.distToTarget - b.distToTarget)[0];
-          const fv = BUS_STOPS[stops[oIdx]];
-          if (!fv) continue;
-          const stopCount = best.i - oIdx;
-          const legStops = stops.slice(oIdx, best.i + 1).map(c => {
-            const sv = BUS_STOPS[c];
-            return sv ? { code:c, lat:sv[0], lng:sv[1], name:sv[2] } : { code:c, lat:0, lng:0, name:c };
-          });
-          found.push({
-            serviceNo,
-            from: { code:stops[oIdx], lat:fv[0], lng:fv[1], name:fv[2] },
-            to:   { code:best.code, lat:best.lat, lng:best.lng, name:best.name },
-            stops: legStops, stopCount, estMins: stopCount * BUS_MIN,
-          });
+          
+          // Allow stops within an 80m threshold of the absolute closest stop to capture opposite stops across the road
+          const sortedCandidates = candidateDest.sort((a, b) => a.distToTarget - b.distToTarget);
+          const minD = sortedCandidates[0].distToTarget;
+          const validCandidates = sortedCandidates.filter(c => c.distToTarget <= minD + 80);
+
+          for (const best of validCandidates) {
+            const fv = BUS_STOPS[stops[oIdx]];
+            if (!fv) continue;
+            const stopCount = best.i - oIdx;
+            const legStops = stops.slice(oIdx, best.i + 1).map(c => {
+              const sv = BUS_STOPS[c];
+              return sv ? { code:c, lat:sv[0], lng:sv[1], name:sv[2] } : { code:c, lat:0, lng:0, name:c };
+            });
+            found.push({
+              serviceNo,
+              from: { code:stops[oIdx], lat:fv[0], lng:fv[1], name:fv[2] },
+              to:   { code:best.code, lat:best.lat, lng:best.lng, name:best.name },
+              stops: legStops, stopCount, estMins: stopCount * BUS_MIN,
+            });
+          }
         }
 
         // Deduplicate by exact from+to stop pair so both directions show
