@@ -635,7 +635,7 @@ function BusInputPanel({ onTrack }) {
     setTimeout(() => {
       try {
         const BUS_MIN = 3;
-        const NEARBY_M = 400; // for postal code mode — find stops near the coord
+        const NEARBY_M = 800; // for postal code mode — find stops near the coord
 
         // Always search all nearby stops regardless of input method
         // People don't know which side of the road a stop code is on
@@ -665,30 +665,36 @@ function BusInputPanel({ onTrack }) {
 
         const found = [];
 
-        // For each route, check if it passes through an origin stop
-        // then later passes through a destination stop
+        // For each route, find all dest stops it passes through after the origin,
+        // then pick the one closest to the destination coord — not the first one hit
+        const dLat = to.coord.lat, dLng = to.coord.lng;
         for (const [key, stops] of Object.entries(BUS_ROUTES)) {
           const [serviceNo] = key.split("_");
-          let oIdx = -1, dIdx = -1;
+          let oIdx = -1;
+          const candidateDest = []; // all dest stops this route passes through after origin
           for (let i = 0; i < stops.length; i++) {
             if (originCodes.has(stops[i]) && oIdx === -1) oIdx = i;
-            if (destCodes.has(stops[i]) && oIdx !== -1 && i > oIdx) { dIdx = i; break; }
+            if (oIdx !== -1 && i > oIdx && destCodes.has(stops[i])) {
+              const sv = BUS_STOPS[stops[i]];
+              if (sv) candidateDest.push({ i, code:stops[i], lat:sv[0], lng:sv[1], name:sv[2], distToTarget: haversineM(dLat, dLng, sv[0], sv[1]) });
+            }
           }
-          if (oIdx !== -1 && dIdx !== -1) {
-            const fv = BUS_STOPS[stops[oIdx]], tv = BUS_STOPS[stops[dIdx]];
-            if (!fv || !tv) continue;
-            const stopCount = dIdx - oIdx;
-            const legStops = stops.slice(oIdx, dIdx + 1).map(c => {
-              const sv = BUS_STOPS[c];
-              return sv ? { code:c, lat:sv[0], lng:sv[1], name:sv[2] } : { code:c, lat:0, lng:0, name:c };
-            });
-            found.push({
-              serviceNo,
-              from: { code:stops[oIdx], lat:fv[0], lng:fv[1], name:fv[2] },
-              to:   { code:stops[dIdx], lat:tv[0], lng:tv[1], name:tv[2] },
-              stops: legStops, stopCount, estMins: stopCount * BUS_MIN,
-            });
-          }
+          if (oIdx === -1 || !candidateDest.length) continue;
+          // Pick the candidate closest to the destination coord
+          const best = candidateDest.sort((a, b) => a.distToTarget - b.distToTarget)[0];
+          const fv = BUS_STOPS[stops[oIdx]];
+          if (!fv) continue;
+          const stopCount = best.i - oIdx;
+          const legStops = stops.slice(oIdx, best.i + 1).map(c => {
+            const sv = BUS_STOPS[c];
+            return sv ? { code:c, lat:sv[0], lng:sv[1], name:sv[2] } : { code:c, lat:0, lng:0, name:c };
+          });
+          found.push({
+            serviceNo,
+            from: { code:stops[oIdx], lat:fv[0], lng:fv[1], name:fv[2] },
+            to:   { code:best.code, lat:best.lat, lng:best.lng, name:best.name },
+            stops: legStops, stopCount, estMins: stopCount * BUS_MIN,
+          });
         }
 
         // Deduplicate by exact from+to stop pair so both directions show
