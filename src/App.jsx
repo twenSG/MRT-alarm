@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import BUS_STOPS from "./busStops.js";
+import BUS_ROUTES from "./busRoutes.js";
 
 // ─── MRT STATION DATABASE ────────────────────────────────────────────────────
 const STATIONS = [
@@ -590,15 +591,68 @@ function BusInputPanel({ onTrack }) {
     }
   }
 
-  async function findRoutes() {
+  function findRoutes() {
     if (!from.coord || !to.coord) return;
     setLoading(true); setRoutes(null); setConfirm(null); setSelectedIdx(null);
-    try {
-      const res = await fetch(`/api/bus-route?oLat=${from.coord.lat}&oLng=${from.coord.lng}&dLat=${to.coord.lat}&dLng=${to.coord.lng}`);
-      const data = await res.json();
-      setRoutes({ list: data.routes || [], nearbyBoard: data.originStops || [], nearbyAlight: data.destStops || [] });
-    } catch { setRoutes({ list:[], nearbyBoard:[], nearbyAlight:[] }); }
-    setLoading(false);
+
+    setTimeout(() => {
+      try {
+        const RADIUS_M = 600;
+        const BUS_MIN = 3;
+
+        const originStops = Object.entries(BUS_STOPS)
+          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(from.coord.lat, from.coord.lng, v[0], v[1]) }))
+          .filter(s => s.d <= RADIUS_M).sort((a,b) => a.d - b.d).slice(0, 30);
+
+        const destStops = Object.entries(BUS_STOPS)
+          .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(to.coord.lat, to.coord.lng, v[0], v[1]) }))
+          .filter(s => s.d <= RADIUS_M).sort((a,b) => a.d - b.d).slice(0, 30);
+
+        if (!originStops.length || !destStops.length) {
+          setRoutes({ list:[], nearbyBoard:[], nearbyAlight:[] });
+          setLoading(false);
+          return;
+        }
+
+        const originCodes = new Set(originStops.map(s => s.code));
+        const destCodes   = new Set(destStops.map(s => s.code));
+        const found = [];
+
+        for (const [key, stops] of Object.entries(BUS_ROUTES)) {
+          const [serviceNo] = key.split("_");
+          let oIdx = -1, dIdx = -1;
+          for (let i = 0; i < stops.length; i++) {
+            if (originCodes.has(stops[i]) && oIdx === -1) oIdx = i;
+            if (destCodes.has(stops[i]) && oIdx !== -1 && i > oIdx) { dIdx = i; break; }
+          }
+          if (oIdx !== -1 && dIdx !== -1) {
+            const fv = BUS_STOPS[stops[oIdx]], tv = BUS_STOPS[stops[dIdx]];
+            if (!fv || !tv) continue;
+            const stopCount = dIdx - oIdx;
+            const legStops = stops.slice(oIdx, dIdx+1).map(c => {
+              const sv = BUS_STOPS[c];
+              return sv ? { code:c, lat:sv[0], lng:sv[1], name:sv[2] } : { code:c, lat:0, lng:0, name:c };
+            });
+            found.push({
+              serviceNo,
+              from: { code:stops[oIdx], lat:fv[0], lng:fv[1], name:fv[2] },
+              to:   { code:stops[dIdx], lat:tv[0], lng:tv[1], name:tv[2] },
+              stops: legStops, stopCount, estMins: stopCount * BUS_MIN,
+            });
+          }
+        }
+
+        const seen = new Map();
+        for (const r of found.sort((a,b) => a.estMins - b.estMins)) {
+          if (!seen.has(r.serviceNo)) seen.set(r.serviceNo, r);
+        }
+        setRoutes({ list:Array.from(seen.values()).slice(0,8), nearbyBoard:originStops.slice(0,6), nearbyAlight:destStops.slice(0,6) });
+      } catch(e) {
+        console.error(e);
+        setRoutes({ list:[], nearbyBoard:[], nearbyAlight:[] });
+      }
+      setLoading(false);
+    }, 50);
   }
 
   // ── Confirm screen
