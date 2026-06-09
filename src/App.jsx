@@ -449,14 +449,15 @@ function PostalInput({ label, value, onChange, status, station }) {
   return (
     <div style={{ marginBottom:12 }}>
       <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:6 }}>{label}</div>
-      <div style={{ background:"#161B27", borderRadius:14, border:`1.5px solid ${color}`, transition:"border-color .2s", padding:"0 14px", display:"flex", alignItems:"center", gap:10 }}>
+      <button style={{ width:"100%", background:"#161B27", borderRadius:14, border:`1.5px solid ${color}`, transition:"border-color .2s", padding:"14px 16px", display:"flex", alignItems:"center", gap:10, cursor:"text", textAlign:"left", position:"relative" }}
+        onClick={e => e.currentTarget.querySelector("input").focus()}>
         <span style={{ fontSize:16 }}>{status==="ok"?"✅":status==="loading"?"⏳":status==="error"?"❌":"📍"}</span>
         <input
           type="tel" inputMode="numeric" maxLength={6} placeholder="e.g. 759775"
           value={value} onChange={e => onChange(e.target.value.replace(/\D/g,"").slice(0,6))}
-          style={{ flex:1, background:"transparent", border:"none", color:"#fff", fontSize:20, fontWeight:600, padding:"14px 0", fontFamily:"DM Mono, monospace", letterSpacing:".1em" }}
+          style={{ flex:1, background:"transparent", border:"none", color:value?"#fff":"#374151", fontSize:15, fontWeight:value?700:400, padding:0, fontFamily:"'DM Sans', -apple-system, sans-serif", letterSpacing:"normal", outline:"none" }}
         />
-      </div>
+      </button>
       {station && <div style={{ color:"#009645", fontSize:12, marginTop:5, paddingLeft:4 }}>→ Nearest: <b>{station.name}</b></div>}
       {status==="error" && <div style={{ color:"#DC2626", fontSize:12, marginTop:5, paddingLeft:4 }}>Postal code not found</div>}
     </div>
@@ -558,7 +559,7 @@ function BusStopField({ label, value, onChange, status, name }) {
           type="tel" inputMode="numeric" maxLength={6}
           placeholder="Bus stop code or postal code"
           value={value} onChange={e => onChange(e.target.value.replace(/\D/g,"").slice(0,6))}
-          style={{ flex:1, background:"transparent", border:"none", color:"#fff", fontSize:18, fontWeight:600, padding:"14px 0", fontFamily:"DM Mono, monospace", letterSpacing:".08em" }}
+          style={{ flex:1, background:"transparent", border:"none", color:value?"#fff":"#374151", fontSize:15, fontWeight:value?700:400, padding:0, fontFamily:"'DM Sans', -apple-system, sans-serif", letterSpacing:"normal", outline:"none" }}
         />
       </div>
       {status==="ok" && name && <div style={{ color:"#4ade80", fontSize:12, marginTop:4, paddingLeft:4 }}>{name}</div>}
