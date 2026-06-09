@@ -782,6 +782,267 @@ function BusInputPanel({ onTrack }) {
   );
 }
 
+
+// ─── MIXED ROUTING ───────────────────────────────────────────────────────────
+function computeMixedRoutes(oLat, oLng, dLat, dLng) {
+  const STATION_RADIUS = 800;   // max walk to MRT station
+  const BUS_STOP_RADIUS = 400;  // max walk to bus stop
+  const MRT_MIN = 2;            // mins per MRT stop
+  const BUS_MIN = 3;            // mins per bus stop
+  const TRANSFER_PENALTY = 5;   // mins per transfer
+
+  // Find MRT stations near a point
+  function nearbyStations(lat, lng) {
+    return UNIQUE_STATIONS
+      .map(s => ({ ...s, d: haversineM(lat, lng, s.lat, s.lng) }))
+      .filter(s => s.d <= STATION_RADIUS)
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 5);
+  }
+
+  // Find bus stops near a point
+  function nearbyBusStops(lat, lng) {
+    return Object.entries(BUS_STOPS)
+      .map(([code, v]) => ({ code, lat: v[0], lng: v[1], name: v[2], d: haversineM(lat, lng, v[0], v[1]) }))
+      .filter(s => s.d <= BUS_STOP_RADIUS)
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 10);
+  }
+
+  // Find direct bus routes between two sets of stop codes
+  function findDirectBus(fromCodes, toCodes) {
+    const oSet = new Set(fromCodes);
+    const dSet = new Set(toCodes);
+    const found = [];
+    for (const [key, stops] of Object.entries(BUS_ROUTES)) {
+      const [serviceNo] = key.split("_");
+      let oIdx = -1, dIdx = -1;
+      for (let i = 0; i < stops.length; i++) {
+        if (oSet.has(stops[i]) && oIdx === -1) oIdx = i;
+        if (dSet.has(stops[i]) && oIdx !== -1 && i > oIdx) { dIdx = i; break; }
+      }
+      if (oIdx !== -1 && dIdx !== -1) {
+        const fv = BUS_STOPS[stops[oIdx]], tv = BUS_STOPS[stops[dIdx]];
+        if (!fv || !tv) continue;
+        const stopCount = dIdx - oIdx;
+        found.push({
+          serviceNo,
+          from: { code: stops[oIdx], lat: fv[0], lng: fv[1], name: fv[2] },
+          to:   { code: stops[dIdx], lat: tv[0], lng: tv[1], name: tv[2] },
+          stops: stops.slice(oIdx, dIdx + 1).map(c => { const sv = BUS_STOPS[c]; return sv ? { code:c, lat:sv[0], lng:sv[1], name:sv[2] } : { code:c, lat:0, lng:0, name:c }; }),
+          stopCount,
+          estMins: stopCount * BUS_MIN,
+        });
+      }
+    }
+    const seen = new Map();
+    for (const r of found.sort((a, b) => a.estMins - b.estMins)) {
+      if (!seen.has(r.serviceNo)) seen.set(r.serviceNo, r);
+    }
+    return Array.from(seen.values()).slice(0, 3);
+  }
+
+  // Find MRT route between two station names
+  function findMRT(fromName, toName) {
+    const path = findPathFewestTransfers(fromName, toName) || findPath(fromName, toName);
+    if (!path) return null;
+    const legs = pathToLegs(path);
+    if (!legs.length) return null;
+    const alerts = buildAlerts(legs);
+    const uniqueNames = [...new Set(path.map(c => STATIONS.find(s => s.code === c)?.name))];
+    return { legs, alerts, stopCount: uniqueNames.length - 1, transfers: legs.length - 1 };
+  }
+
+  const routes = [];
+
+  const oStations = nearbyStations(oLat, oLng);
+  const dStations = nearbyStations(dLat, dLng);
+  const oBusStops = nearbyBusStops(oLat, oLng);
+  const dBusStops = nearbyBusStops(dLat, dLng);
+
+  // 1. Pure MRT
+  if (oStations.length && dStations.length) {
+    const best = oStations.flatMap(os => dStations.map(ds => {
+      if (os.name === ds.name) return null;
+      const r = findMRT(os.name, ds.name);
+      if (!r) return null;
+      return { ...r, type: "mrt", transfers: r.transfers, estMins: r.stopCount * MRT_MIN + r.transfers * TRANSFER_PENALTY,
+        label: `MRT: ${os.name} → ${ds.name}`, originStation: os, destStation: ds };
+    })).filter(Boolean).sort((a, b) => a.transfers - b.transfers || a.estMins - b.estMins)[0];
+    if (best) routes.push(best);
+  }
+
+  // 2. Pure bus
+  if (oBusStops.length && dBusStops.length) {
+    const buses = findDirectBus(oBusStops.map(s => s.code), dBusStops.map(s => s.code));
+    for (const bus of buses.slice(0, 2)) {
+      routes.push({
+        type: "bus", transfers: 0,
+        estMins: bus.estMins,
+        label: `Bus ${bus.serviceNo}: ${bus.from.name} → ${bus.to.name}`,
+        legs: [{ line: "BUS", stops: bus.stops, serviceNo: bus.serviceNo }],
+        alerts: [{ id: "alight-bus", type: "alight", stopCode: bus.to.code, stopName: bus.to.name, radiusM: 400, message: "Alight now!", detail: `${bus.to.name} (${bus.to.code})`, color: "#009645", vibratePattern: [300,100,300,100,600], lat: bus.to.lat, lng: bus.to.lng }],
+        stopCount: bus.stopCount, fromName: bus.from.name, toName: bus.to.name,
+      });
+    }
+  }
+
+  // 3. Bus → MRT: bus from origin to a station, then MRT to dest
+  if (oBusStops.length && oStations.length && dStations.length) {
+    for (const station of oStations.slice(0, 3)) {
+      // Find bus stops near this station
+      const stationStops = nearbyBusStops(station.lat, station.lng);
+      if (!stationStops.length) continue;
+      const buses = findDirectBus(oBusStops.map(s => s.code), stationStops.map(s => s.code));
+      if (!buses.length) continue;
+      const bus = buses[0];
+      for (const ds of dStations.slice(0, 2)) {
+        if (station.name === ds.name) continue;
+        const mrt = findMRT(station.name, ds.name);
+        if (!mrt) continue;
+        const transfers = 1 + mrt.transfers;
+        const estMins = bus.estMins + mrt.stopCount * MRT_MIN + transfers * TRANSFER_PENALTY;
+        routes.push({
+          type: "bus+mrt", transfers, estMins,
+          label: `Bus ${bus.serviceNo} → MRT to ${ds.name}`,
+          legs: [
+            { line: "BUS", stops: bus.stops, serviceNo: bus.serviceNo },
+            ...mrt.legs,
+          ],
+          alerts: [
+            { id: "transfer-to-mrt", type: "transfer", stopCode: bus.to.code, stopName: bus.to.name, radiusM: 500, message: "Alight & head to MRT", detail: `Board ${station.name} MRT`, color: "#F59E0B", vibratePattern: [200,100,200], lat: bus.to.lat, lng: bus.to.lng },
+            ...mrt.alerts,
+          ],
+          stopCount: bus.stopCount + mrt.stopCount,
+          fromName: bus.from.name, toName: ds.name,
+        });
+      }
+    }
+  }
+
+  // 4. MRT → Bus: MRT from origin station to a station near dest, then bus
+  if (oStations.length && dBusStops.length && dStations.length) {
+    for (const ds of dStations.slice(0, 3)) {
+      const stationStops = nearbyBusStops(ds.lat, ds.lng);
+      if (!stationStops.length) continue;
+      const buses = findDirectBus(stationStops.map(s => s.code), dBusStops.map(s => s.code));
+      if (!buses.length) continue;
+      const bus = buses[0];
+      for (const os of oStations.slice(0, 2)) {
+        if (os.name === ds.name) continue;
+        const mrt = findMRT(os.name, ds.name);
+        if (!mrt) continue;
+        const transfers = mrt.transfers + 1;
+        const estMins = mrt.stopCount * MRT_MIN + bus.estMins + transfers * TRANSFER_PENALTY;
+        routes.push({
+          type: "mrt+bus", transfers, estMins,
+          label: `MRT to ${ds.name} → Bus ${bus.serviceNo}`,
+          legs: [
+            ...mrt.legs,
+            { line: "BUS", stops: bus.stops, serviceNo: bus.serviceNo },
+          ],
+          alerts: [
+            ...mrt.alerts.slice(0, -1),
+            { id: "transfer-to-bus", type: "transfer", stopCode: mrt.legs[mrt.legs.length-1].stops.slice(-1)[0].code, stopName: ds.name, radiusM: 500, message: "Alight & board bus", detail: `Take Bus ${bus.serviceNo}`, color: "#F59E0B", vibratePattern: [200,100,200], lat: ds.lat, lng: ds.lng },
+            { id: "alight-bus", type: "alight", stopCode: bus.to.code, stopName: bus.to.name, radiusM: 400, message: "Alight now!", detail: `${bus.to.name} (${bus.to.code})`, color: "#009645", vibratePattern: [300,100,300,100,600], lat: bus.to.lat, lng: bus.to.lng },
+          ],
+          stopCount: mrt.stopCount + bus.stopCount,
+          fromName: os.name, toName: bus.to.name,
+        });
+      }
+    }
+  }
+
+  // Sort by transfers then time, deduplicate similar routes
+  return routes.sort((a, b) => a.transfers - b.transfers || a.estMins - b.estMins).slice(0, 4);
+}
+
+function MixedInputPanel({ onTrack }) {
+  const [fromPostal, setFromPostal] = useState("");
+  const [toPostal,   setToPostal]   = useState("");
+  const [fromStatus, setFromStatus] = useState("idle");
+  const [toStatus,   setToStatus]   = useState("idle");
+  const [fromCoord,  setFromCoord]  = useState(null);
+  const [toCoord,    setToCoord]    = useState(null);
+  const [fromAddr,   setFromAddr]   = useState("");
+  const [toAddr,     setToAddr]     = useState("");
+  const [routes,     setRoutes]     = useState(null);
+  const [loading,    setLoading]    = useState(false);
+  const [selected,   setSelected]   = useState(null);
+  const debounce = useRef({});
+
+  function handlePostal(side, val) {
+    const v = val.replace(/\D/g, "").slice(0, 6);
+    if (side === "from") { setFromPostal(v); setFromCoord(null); setFromAddr(""); setFromStatus(v.length === 6 ? "loading" : "idle"); }
+    else                 { setToPostal(v);   setToCoord(null);   setToAddr("");   setToStatus(v.length === 6 ? "loading" : "idle"); }
+    if (v.length !== 6) return;
+    clearTimeout(debounce.current[side]);
+    debounce.current[side] = setTimeout(async () => {
+      try {
+        const r = await geocodePostal(v);
+        if (side === "from") { setFromCoord({ lat: r.lat, lng: r.lng }); setFromAddr(r.address); setFromStatus("ok"); }
+        else                 { setToCoord({ lat: r.lat, lng: r.lng });   setToAddr(r.address);   setToStatus("ok"); }
+      } catch {
+        if (side === "from") setFromStatus("error");
+        else setToStatus("error");
+      }
+    }, 600);
+  }
+
+  function search() {
+    if (!fromCoord || !toCoord) return;
+    setLoading(true); setRoutes(null); setSelected(null);
+    setTimeout(() => {
+      try {
+        const results = computeMixedRoutes(fromCoord.lat, fromCoord.lng, toCoord.lat, toCoord.lng);
+        setRoutes(results);
+      } catch(e) { console.error(e); setRoutes([]); }
+      setLoading(false);
+    }, 50);
+  }
+
+  const typeLabel = { mrt: "🚇 MRT", bus: "🚌 Bus", "bus+mrt": "🚌→🚇 Bus + MRT", "mrt+bus": "🚇→🚌 MRT + Bus" };
+  const typeColor = { mrt: "#D42E12", bus: "#F59E0B", "bus+mrt": "#9D5918", "mrt+bus": "#005EC4" };
+
+  return (
+    <>
+      <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from", v)} status={fromStatus} station={fromAddr ? { name: fromAddr } : null} />
+      <PostalInput label="To (postal code)"   value={toPostal}   onChange={v => handlePostal("to",   v)} status={toStatus}   station={toAddr   ? { name: toAddr }   : null} />
+
+      <button disabled={!fromCoord || !toCoord || loading} onClick={search}
+        style={{ width:"100%", padding:"13px", borderRadius:12, border:"none", background:fromCoord&&toCoord&&!loading?"#2563EB":"#1E2D40", color:fromCoord&&toCoord&&!loading?"#fff":"#374151", fontSize:14, fontWeight:800, cursor:fromCoord&&toCoord&&!loading?"pointer":"not-allowed" }}>
+        {loading ? "Finding routes…" : "Find Best Routes"}
+      </button>
+
+      {routes && routes.length === 0 && (
+        <div style={{ color:"#EF4444", fontSize:12, marginTop:10, paddingLeft:4 }}>No routes found between these locations.</div>
+      )}
+
+      {routes && routes.length > 0 && (
+        <div style={{ marginTop:16 }}>
+          <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:8 }}>Routes found</div>
+          {routes.map((r, i) => (
+            <button key={i} onClick={() => setSelected(i)}
+              style={{ width:"100%", marginBottom:8, padding:"12px 14px", borderRadius:12, border:`1px solid ${selected===i?typeColor[r.type]:"#1E2D40"}`, background:selected===i?"#0a1628":"#0D1117", cursor:"pointer", textAlign:"left" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <span style={{ color:typeColor[r.type]||"#fff", fontSize:13, fontWeight:800 }}>{typeLabel[r.type]||r.type}</span>
+                <span style={{ color:"#6B7280", fontSize:11 }}>{r.transfers} transfer{r.transfers!==1?"s":""} · ~{r.estMins}min</span>
+              </div>
+              <div style={{ color:"#4B5563", fontSize:11, marginTop:3 }}>{r.label}</div>
+            </button>
+          ))}
+          {selected !== null && (
+            <button onClick={() => onTrack(routes[selected])}
+              style={{ width:"100%", padding:"14px", borderRadius:14, border:"none", background:"#D42E12", color:"#fff", fontSize:15, fontWeight:800, cursor:"pointer", boxShadow:"0 8px 24px rgba(212,46,18,.3)", marginTop:4 }}>
+              Track This Route →
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── SCREENS ─────────────────────────────────────────────────────────────────
 const S = { INPUT:0, CONFIRM:1, TRACKING:2, DONE:3 };
 
@@ -1041,13 +1302,9 @@ export default function App() {
               <BusInputPanel onTrack={r => { setRoute(r); setScreen(S.CONFIRM); }} />
             )}
 
-            {/* Mixed WIP */}
+            {/* Mixed mode */}
             {inputMode === "mixed" && (
-              <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", textAlign:"center", padding:"32px 0" }}>
-                <div style={{ fontSize:40, marginBottom:16 }}>🔀</div>
-                <div style={{ color:"#fff", fontSize:17, fontWeight:700, marginBottom:8 }}>Mixed routing</div>
-                <div style={{ color:"#374151", fontSize:13, lineHeight:1.6 }}>Combined MRT + bus journeys are coming soon.</div>
-              </div>
+              <MixedInputPanel onTrack={r => { setRoute(r); setScreen(S.CONFIRM); }} />
             )}
 
             {routeError && <div style={{ color:"#EF4444", fontSize:12, marginBottom:10, paddingLeft:4 }}>{routeError}</div>}
