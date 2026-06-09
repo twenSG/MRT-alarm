@@ -689,21 +689,31 @@ function BusInputPanel({ onTrack }) {
           }
         }
 
-        // Deduplicate by serviceNo keeping shortest trip
+        // Keep both directions if they differ significantly (>3 stops apart)
+        // This lets user see e.g. "913 (8 stops)" vs "913 (21 stops)" and pick
         const seen = new Map();
         for (const r of found.sort((a, b) => a.estMins - b.estMins)) {
-          if (!seen.has(r.serviceNo) || seen.get(r.serviceNo).estMins > r.estMins) seen.set(r.serviceNo, r);
+          const existing = seen.get(r.serviceNo);
+          if (!existing) {
+            seen.set(r.serviceNo, r);
+          } else if (r.stopCount < existing.stopCount - 3) {
+            // This direction is significantly shorter — replace
+            seen.set(r.serviceNo, r);
+          }
+          // Otherwise skip — same service, similar length
         }
 
         // Nearby stops for the swap UI on confirm screen
         const nearbyBoard  = Object.entries(BUS_STOPS)
           .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(from.coord.lat, from.coord.lng, v[0], v[1]) }))
-          .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 6);
+          .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 3);
         const nearbyAlight = Object.entries(BUS_STOPS)
           .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(to.coord.lat, to.coord.lng, v[0], v[1]) }))
-          .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 6);
+          .filter(s => s.d <= 400).sort((a,b) => a.d - b.d).slice(0, 3);
 
-        setRoutes({ list: Array.from(seen.values()).slice(0, 8), nearbyBoard, nearbyAlight });
+        // Show both directions of the same service so user can pick the right one
+        const allRoutes = found.sort((a, b) => a.estMins - b.estMins).slice(0, 8);
+        setRoutes({ list: allRoutes, nearbyBoard, nearbyAlight });
       } catch(e) {
         console.error(e);
         setRoutes({ list:[], nearbyBoard:[], nearbyAlight:[] });
@@ -835,16 +845,22 @@ function BusInputPanel({ onTrack }) {
       {routes && routes.list.length > 0 && (
         <div style={{ marginTop:16 }}>
           <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:8 }}>Routes found</div>
-          {routes.list.map((r, i) => (
-            <button key={i} onClick={() => { setSelectedIdx(i); setConfirm({ route:r, boardStop:r.from, alightStop:r.to, nearbyBoard:routes.nearbyBoard, nearbyAlight:routes.nearbyAlight }); }}
-              style={{ width:"100%", marginBottom:8, padding:"12px 14px", borderRadius:12, border:`1px solid ${selectedIdx===i?"#2563EB":"#1E2D40"}`, background:selectedIdx===i?"#0a1628":"#0D1117", cursor:"pointer", textAlign:"left" }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                <span style={{ color:"#fff", fontSize:16, fontWeight:800 }}>Bus {r.serviceNo}</span>
-                <span style={{ color:"#6B7280", fontSize:11 }}>{r.stopCount} stops · ~{r.estMins} min</span>
-              </div>
-              <div style={{ color:"#4B5563", fontSize:11, marginTop:3 }}>{r.from.name} → {r.to.name}</div>
-            </button>
-          ))}
+          {routes.list.map((r, i) => {
+            // Warn if another result for same service is much shorter (wrong direction)
+            const sameService = routes.list.filter((x, j) => j !== i && x.serviceNo === r.serviceNo);
+            const hasShorter = sameService.some(x => x.stopCount < r.stopCount - 3);
+            return (
+              <button key={i} onClick={() => { setSelectedIdx(i); setConfirm({ route:r, boardStop:r.from, alightStop:r.to, nearbyBoard:routes.nearbyBoard, nearbyAlight:routes.nearbyAlight }); }}
+                style={{ width:"100%", marginBottom:8, padding:"12px 14px", borderRadius:12, border:`1px solid ${selectedIdx===i?"#2563EB":hasShorter?"#78350f":"#1E2D40"}`, background:selectedIdx===i?"#0a1628":"#0D1117", cursor:"pointer", textAlign:"left" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ color:"#fff", fontSize:16, fontWeight:800 }}>Bus {r.serviceNo}</span>
+                  <span style={{ color:hasShorter?"#F59E0B":"#6B7280", fontSize:11 }}>{r.stopCount} stops · ~{r.estMins} min</span>
+                </div>
+                <div style={{ color:"#4B5563", fontSize:11, marginTop:3 }}>{r.from.name} → {r.to.name}</div>
+                {hasShorter && <div style={{ color:"#F59E0B", fontSize:10, marginTop:4 }}>⚠️ Long route — check the shorter option below</div>}
+              </button>
+            );
+          })}
         </div>
       )}
     </>
