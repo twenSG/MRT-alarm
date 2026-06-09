@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "0 2 1 * *"  # Re-fetch monthly (new stops open occasionally)
-  workflow_dispatch:      # Allow manual trigger
+    - cron: "0 2 1 * *"
+  workflow_dispatch:
 
 jobs:
   fetch-stops:
@@ -16,6 +16,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Debug secret
+        run: |
+          if [ -z "$LTA_API_KEY" ]; then
+            echo "LTA_API_KEY is EMPTY"
+          else
+            echo "LTA_API_KEY is set, length=${#LTA_API_KEY}"
+          fi
+        env:
+          LTA_API_KEY: ${{ secrets.LTA_API_KEY }}
 
       - name: Fetch bus stops from LTA DataMall
         env:
