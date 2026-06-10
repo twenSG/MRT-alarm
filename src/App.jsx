@@ -1064,8 +1064,10 @@ function JourneyBuilder({ onTrack }) {
       newLeg = { type:"bus", serviceNo:selectedService.id, terminus:selectedService.terminus, stops:legStops };
     } else {
       // MRT leg — store as fromStation/toStation, expand at track time
-      newLeg = { type:"mrt", line:selectedService.line, terminus:selectedService.terminus, fromStation:currentStop.name, toStation:stop.name,
-        stops:[currentStop, stop] }; // simplified for display
+      const fromStationName = selectedService.stationName || currentStop.name;
+      const fromStationObj = UNIQUE_STATIONS.find(s => s.name === fromStationName) || currentStop;
+      newLeg = { type:"mrt", line:selectedService.line, terminus:selectedService.terminus, fromStation:fromStationName, toStation:stop.name,
+        stops:[{ code:fromStationObj.code || fromStationName, name:fromStationName, lat:fromStationObj.lat, lng:fromStationObj.lng }, stop] };
     }
     const newLegs = [...legs, newLeg];
     setLegs(newLegs);
@@ -1092,7 +1094,7 @@ function JourneyBuilder({ onTrack }) {
   const serviceStops = selectedService ? (
     selectedService.type === "bus"
       ? stopsForBus(selectedService.id, currentStop.code)
-      : stationsForMRTLine(selectedService.line, currentStop.name, selectedService.direction)
+      : stationsForMRTLine(selectedService.line, selectedService.stationName || currentStop.name, selectedService.direction)
   ) : [];
   const filteredStops = serviceStops.filter(s => s.name.toLowerCase().includes(stopFilter.toLowerCase())).slice(0, 50);
 
