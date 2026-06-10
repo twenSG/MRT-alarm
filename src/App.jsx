@@ -946,7 +946,7 @@ function buildJourneyRoute(legs) {
   // Convert journey builder legs into the route format used by tracking screen
   const trackLegs = legs.map(leg => {
     if (leg.type === "bus") {
-      return { line:"BUS", serviceNo:leg.serviceNo, stops:leg.stops };
+      return { line:"BUS", serviceNo:leg.serviceNo, terminus:leg.terminus, stops:leg.stops };
     } else {
       // MRT leg — the user picked a specific line, so expand stations directly
       // from that line's sequence between fromStation and toStation
@@ -965,7 +965,7 @@ function buildJourneyRoute(legs) {
         ? codes.slice(fromIdx, toIdx + 1)
         : codes.slice(toIdx, fromIdx + 1).reverse();
       const stops = slice.map(s => ({ code:s.code, name:s.name, lat:s.lat, lng:s.lng }));
-      return { line:leg.line, stops };
+      return { line:leg.line, terminus:leg.terminus, stops };
     }
   }).flat().filter(Boolean);
 
@@ -1061,10 +1061,10 @@ function JourneyBuilder({ onTrack }) {
       const allStops = stopsForBus(selectedService.id, currentStop.code, selectedService.routeKey);
       const toIdx = allStops.findIndex(s => s.code === stop.code);
       const legStops = [currentStop, ...allStops.slice(0, toIdx+1)];
-      newLeg = { type:"bus", serviceNo:selectedService.id, stops:legStops };
+      newLeg = { type:"bus", serviceNo:selectedService.id, terminus:selectedService.terminus, stops:legStops };
     } else {
       // MRT leg — store as fromStation/toStation, expand at track time
-      newLeg = { type:"mrt", line:selectedService.line, fromStation:currentStop.name, toStation:stop.name,
+      newLeg = { type:"mrt", line:selectedService.line, terminus:selectedService.terminus, fromStation:currentStop.name, toStation:stop.name,
         stops:[currentStop, stop] }; // simplified for display
     }
     const newLegs = [...legs, newLeg];
@@ -1481,6 +1481,7 @@ export default function App() {
                       <LinePill line={leg.line} small />
                       {leg.serviceNo && <span style={{ color:"#6B7280", fontSize:11 }}>Bus {leg.serviceNo}</span>}
                       {!leg.serviceNo && <span style={{ color:"#374151", fontSize:10 }}>{meta.label}</span>}
+                      {leg.terminus && <span style={{ color:"#F59E0B", fontSize:10, fontWeight:600 }}>→ {leg.terminus}</span>}
                     </div>
                     {leg.stops.map((stop, si) => {
                       const isTransfer = route.alerts.find(a => a.stopCode===stop.code && a.type==="transfer");
@@ -1588,6 +1589,7 @@ export default function App() {
                     <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:6, marginLeft:26 }}>
                       <LinePill line={leg.line} small />
                       {leg.serviceNo && <span style={{ color:"#6B7280", fontSize:11 }}>Bus {leg.serviceNo}</span>}
+                      {leg.terminus && <span style={{ color:"#F59E0B", fontSize:10, fontWeight:600 }}>→ {leg.terminus}</span>}
                     </div>
                     {leg.stops.map((stop, si) => {
                       const isTransfer = route.alerts.find(a => a.stopCode===stop.code && a.type==="transfer");
