@@ -948,12 +948,24 @@ function buildJourneyRoute(legs) {
     if (leg.type === "bus") {
       return { line:"BUS", serviceNo:leg.serviceNo, stops:leg.stops };
     } else {
-      // MRT leg — build stop list from LINE_SEQUENCES
-      const fromName = leg.fromStation, toName = leg.toStation;
-      const path = findPathFewestTransfers(fromName, toName) || findPath(fromName, toName);
-      if (!path) return null;
-      const pathLegs = pathToLegs(path);
-      return pathLegs; // array of legs
+      // MRT leg — the user picked a specific line, so expand stations directly
+      // from that line's sequence between fromStation and toStation
+      const seq = LINE_SEQUENCES[leg.line] || [];
+      const codes = seq.map(c => STATIONS.find(s => s.code === c)).filter(Boolean);
+      const fromIdx = codes.findIndex(s => s.name === leg.fromStation);
+      const toIdx   = codes.findIndex(s => s.name === leg.toStation);
+      if (fromIdx === -1 || toIdx === -1) {
+        // Fallback: pathfind if the stations aren't both on this line
+        const path = findPathFewestTransfers(leg.fromStation, leg.toStation) || findPath(leg.fromStation, leg.toStation);
+        if (!path) return null;
+        return pathToLegs(path);
+      }
+      // Slice the sequence in the direction of travel
+      const slice = fromIdx <= toIdx
+        ? codes.slice(fromIdx, toIdx + 1)
+        : codes.slice(toIdx, fromIdx + 1).reverse();
+      const stops = slice.map(s => ({ code:s.code, name:s.name, lat:s.lat, lng:s.lng }));
+      return { line:leg.line, stops };
     }
   }).flat().filter(Boolean);
 
@@ -1450,12 +1462,6 @@ export default function App() {
               {route.fromName} → {route.toName} · {route.stopCount} stops · {route.transfers} transfer{route.transfers!==1?"s":""}
             </p>
 
-            {!route.isBus && (
-              <button onClick={() => { const alt=route.mode==="least-transfers"?"fastest":"least-transfers"; setRouteMode(alt); buildRoute(alt); }}
-                style={{ background:"#161B27", border:"1px solid #1E2D40", borderRadius:10, padding:"7px 14px", color:"#6B7280", fontSize:12, fontWeight:600, cursor:"pointer", marginBottom:14, alignSelf:"flex-start" }}>
-                ↔ Try {route.mode==="least-transfers"?"fewest stops":"least transfers"} instead
-              </button>
-            )}
 
             <div style={{ display:"flex", gap:8, marginBottom:14 }}>
               {[["⇄","Transfer alert","#F59E0B","#1c1400"],["↓","Alight alert","#009645","#052e16"]].map(([icon,label,color,bg],i) => (
