@@ -1019,15 +1019,16 @@ function JourneyBuilder({ onTrack }) {
       return;
     }
 
-    // Text — search MRT station names
-    if (val.trim().length >= 2) {
+    // Text — search MRT station names (only if input has letters, not pure digits)
+    if (val.trim().length >= 2 && /[a-zA-Z]/.test(val)) {
       const matched = UNIQUE_STATIONS
         .filter(s => s.name.toLowerCase().includes(val.trim().toLowerCase()))
         .slice(0, 5)
         .map(s => ({ isMRT:true, name:s.name, lat:s.lat, lng:s.lng, lines:s.lines, d:0 }));
       setNearbyOrigin(matched);
       setOriginStatus(matched.length > 0 ? "ok" : "idle");
-    } else {
+    } else if (!/[a-zA-Z]/.test(val)) {
+      // Pure digits but not yet a valid code — clear suggestions
       setOriginStatus("idle"); setNearbyOrigin([]);
     }
   }
@@ -1434,45 +1435,7 @@ export default function App() {
 
 
 
-            {/* MRT mode */}
-            {inputMode === "station" && (
-              <>
-                <StationPicker label="From" value={fromStation} onChange={st => { setFromStation(st); setRouteError(null); }}
-                  extra={<NearMeBtn onFound={st => { setFromStation(st); setRouteError(null); }} />} />
-                {nearMeDebug && <div style={{ color:"#6B7280", fontSize:10, fontFamily:"DM Mono", padding:"2px 2px 6px", wordBreak:"break-all" }}>{nearMeDebug}</div>}
-                <StationPicker label="To" value={toStation} onChange={st => { setToStation(st); setRouteError(null); }} />
-                <div style={{ marginBottom:16 }}>
-                  <div style={{ color:"#374151", fontSize:11, fontWeight:700, letterSpacing:".07em", textTransform:"uppercase", marginBottom:8 }}>Quick picks</div>
-                  <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                    {[{label:"Sembawang → Lavender",from:"Sembawang",to:"Lavender"},{label:"Orchard → Bugis",from:"Orchard",to:"Bugis"},{label:"Jurong East → Expo",from:"Jurong East",to:"Expo"}].map((eg,i) => (
-                      <button key={i} onClick={() => { const f=UNIQUE_STATIONS.find(s=>s.name===eg.from); const t=UNIQUE_STATIONS.find(s=>s.name===eg.to); if(f)setFromStation(f); if(t)setToStation(t); setRouteError(null); }}
-                        style={{ background:"#161B27", border:"1px solid #1E2D40", borderRadius:10, padding:"6px 12px", color:"#6B7280", fontSize:11, cursor:"pointer", fontWeight:600 }}>
-                        {eg.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* Postal mode (hidden tab - accessible via station picker still but keeping for backwards compat) */}
-            {inputMode === "postal" && (
-              <>
-                <PostalInput label="From (postal code)" value={fromPostal} onChange={v => handlePostal("from",v)} status={fromStatus} station={fromStation}
-                  extra={<NearMeBtn onFound={st => { setFromStation(st); setFromStatus("ok"); setRouteError(null); }} />} />
-                <PostalInput label="To (postal code)" value={toPostal} onChange={v => handlePostal("to",v)} status={toStatus} station={toStation} />
-              </>
-            )}
-
-            {/* Bus mode */}
-            {inputMode === "bus" && (
-              <BusInputPanel onTrack={r => { setRoute(r); setScreen(S.CONFIRM); }} />
-            )}
-
-            {/* Mixed mode */}
-            {inputMode === "mixed" && (
-              <JourneyBuilder onTrack={r => { setRoute(r); setScreen(S.CONFIRM); }} />
-            )}
+            <JourneyBuilder onTrack={r => { setRoute(r); setScreen(S.CONFIRM); }} />
 
 
           </div>
