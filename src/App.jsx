@@ -334,9 +334,9 @@ function buildAlerts(legs) {
     const isLast = i === legs.length - 1;
     const lastStop = leg.stops[leg.stops.length - 1];
     if (!isLast) {
-      alerts.push({ id:`transfer-${lastStop.code}`, type:"transfer", stopCode:lastStop.code, stopName:lastStop.name, radiusM:600, message:"Get ready to transfer", detail:`Board ${LINE_META[legs[i+1].line]?.label || legs[i+1].line} at ${lastStop.name}`, color:"#F59E0B", vibratePattern:[200,100,200], lat:lastStop.lat, lng:lastStop.lng });
+      alerts.push({ id:`transfer-${lastStop.code}`, type:"transfer", stopCode:lastStop.code, stopName:lastStop.name, radiusM:300, message:"Get ready to transfer", detail:`Board ${LINE_META[legs[i+1].line]?.label || legs[i+1].line} at ${lastStop.name}`, color:"#F59E0B", vibratePattern:[200,100,200], lat:lastStop.lat, lng:lastStop.lng });
     } else {
-      alerts.push({ id:`alight-${lastStop.code}`, type:"alight", stopCode:lastStop.code, stopName:lastStop.name, radiusM:400, message:"Alight now!", detail:`${lastStop.name}`, color:"#009645", vibratePattern:[300,100,300,100,600], lat:lastStop.lat, lng:lastStop.lng });
+      alerts.push({ id:`alight-${lastStop.code}`, type:"alight", stopCode:lastStop.code, stopName:lastStop.name, radiusM:200, message:"Alight now!", detail:`${lastStop.name}`, color:"#009645", vibratePattern:[300,100,300,100,600], lat:lastStop.lat, lng:lastStop.lng });
     }
   });
   return alerts;
@@ -796,7 +796,7 @@ function BusInputPanel({ onTrack }) {
             const legStops = bi >= 0 && ai > bi ? stops.slice(bi, ai+1) : stops;
             onTrack({
               legs: [{ line:"BUS", stops:legStops, serviceNo:route.serviceNo }],
-              alerts: [{ id:"alight-bus", type:"alight", stopCode:alightStop.code, stopName:alightStop.name, radiusM:400, message:"Alight now!", detail:`${alightStop.name} (${alightStop.code})`, color:"#009645", vibratePattern:[300,100,300,100,600], lat:alightStop.lat, lng:alightStop.lng }],
+              alerts: [{ id:"alight-bus", type:"alight", stopCode:alightStop.code, stopName:alightStop.name, radiusM:200, message:"Alight now!", detail:`${alightStop.name} (${alightStop.code})`, color:"#009645", vibratePattern:[300,100,300,100,600], lat:alightStop.lat, lng:alightStop.lng }],
               stopCount: legStops.length-1, transfers:0, mode:"fewest", isBus:true, serviceNo:route.serviceNo,
               fromName: `Stop ${boardStop.code}`, toName: alightStop.name,
             });
@@ -862,6 +862,33 @@ function BusInputPanel({ onTrack }) {
 
 // ─── JOURNEY BUILDER (Mixed tab) ─────────────────────────────────────────────
 // Step-by-step: pick stop → pick service → pick destination/transfer → repeat
+
+// Returns all bus services reachable from a location (searches all stops within 200m)
+// Each service entry includes the specific departureStopCode it uses at this location
+function servicesAtPlace(lat, lng) {
+  const nearbyStops = Object.entries(BUS_STOPS)
+    .map(([code, v]) => ({ code, lat:v[0], lng:v[1], name:v[2], d:haversineM(lat, lng, v[0], v[1]) }))
+    .filter(s => s.d <= 300).sort((a,b) => a.d - b.d);
+
+  const buses = [];
+  const seen = new Set();
+  for (const stop of nearbyStops) {
+    for (const [key, stops] of Object.entries(BUS_ROUTES)) {
+      const svc = key.split("_")[0];
+      const idx = stops.indexOf(stop.code);
+      if (idx === -1) continue;
+      const terminusCode = stops[stops.length - 1];
+      const terminusName = BUS_STOPS[terminusCode]?.[2] || terminusCode;
+      const dirKey = `${svc}|${terminusCode}`;
+      if (seen.has(dirKey)) continue;
+      seen.add(dirKey);
+      // Store the actual departure stop code so we can use it for routing
+      buses.push({ type:"bus", id:svc, dirKey, label:`Bus ${svc}`, terminus:terminusName, color:"#F59E0B", routeKey:key, departureStopCode:stop.code, departureStopName:stop.name });
+    }
+  }
+  buses.sort((a,b) => a.id.localeCompare(b.id, undefined, { numeric:true }));
+  return buses;
+}
 
 function servicesAtStop(stopCode) {
   // Show each direction separately with its terminus, so user can tell which way the bus goes
@@ -1058,9 +1085,13 @@ function JourneyBuilder({ onTrack }) {
     // Build the leg
     let newLeg;
     if (selectedService.type === "bus") {
-      const allStops = stopsForBus(selectedService.id, currentStop.code, selectedService.routeKey);
+      // Use the specific departure stop for this service direction (resolves interchange ambiguity)
+      const boardCode = selectedService.departureStopCode || currentStop.code;
+      const boardV = BUS_STOPS[boardCode];
+      const boardStop = boardV ? { code:boardCode, lat:boardV[0], lng:boardV[1], name:boardV[2] } : currentStop;
+      const allStops = stopsForBus(selectedService.id, boardCode, selectedService.routeKey);
       const toIdx = allStops.findIndex(s => s.code === stop.code);
-      const legStops = [currentStop, ...allStops.slice(0, toIdx+1)];
+      const legStops = [boardStop, ...allStops.slice(0, toIdx+1)];
       newLeg = { type:"bus", serviceNo:selectedService.id, terminus:selectedService.terminus, stops:legStops };
     } else {
       // MRT leg — store as fromStation/toStation, expand at track time
@@ -1082,12 +1113,15 @@ function JourneyBuilder({ onTrack }) {
   }
 
   // ── Services at current position
-  const busServices = currentStop && !currentStop.isMRT ? servicesAtStop(currentStop.code) : [];
+  // Use servicesAtPlace which searches all stops within 200m — handles interchanges
+  // where multiple stop codes exist for the same physical location
+  const busServices = currentStop ? servicesAtPlace(currentStop.lat, currentStop.lng) : [];
   const mrtServices = currentStop ? (() => {
+    if (currentStop.isMRT) return servicesAtStation(currentStop.name);
     const nearby = UNIQUE_STATIONS.map(s => ({ ...s, d:haversineM(currentStop.lat, currentStop.lng, s.lat, s.lng) })).filter(s => s.d <= 300).sort((a,b) => a.d-b.d);
     if (!nearby.length) return [];
     return servicesAtStation(nearby[0].name);
-  })() : currentStop?.isMRT ? servicesAtStation(currentStop.name) : [];
+  })() : [];
   const allServices = [...busServices, ...mrtServices];
 
   // ── Stops for selected service
@@ -1609,7 +1643,7 @@ export default function App() {
               })}
             </div>
 
-            {!activeAlert && !showMissed && distanceM != null && distanceM <= 600 && (
+            {!activeAlert && !showMissed && distanceM != null && distanceM <= 300 && (
               <button onClick={() => setShowMissed(true)} style={{ marginTop:10, width:"100%", padding:"10px", borderRadius:12, border:"1px solid #1E2D40", background:"transparent", color:"#374151", fontSize:12, fontWeight:600, cursor:"pointer" }}>
                 😬 I missed my stop
               </button>
